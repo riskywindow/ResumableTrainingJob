@@ -1,0 +1,634 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/checkpoint-native-preemption-controller/phase0/schemas/resumabletrainingjob-phase0.schema.json",
+  "title": "ResumableTrainingJob",
+  "description": "Conceptual Phase 0 schema for a ResumableTrainingJob. This schema is CRD-shaped for review purposes but does not finalize a production Kubernetes API contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "training.checkpoint.example.io/v1alpha1",
+      "description": "Illustrative Phase 0 apiVersion only.",
+      "x-phase0-authorship": "user"
+    },
+    "kind": {
+      "type": "string",
+      "const": "ResumableTrainingJob",
+      "x-phase0-authorship": "user"
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/spec"
+    },
+    "status": {
+      "$ref": "#/$defs/status"
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "minLength": 1,
+          "maxLength": 63,
+          "description": "Stable RTJ name.",
+          "x-phase0-authorship": "user"
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "minLength": 1,
+          "maxLength": 63,
+          "description": "Namespace that scopes the RTJ.",
+          "x-phase0-authorship": "user"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "x-phase0-authorship": "user"
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "x-phase0-authorship": "user"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "queueName",
+        "workloadPriorityClassName",
+        "identity",
+        "runtime",
+        "checkpoint",
+        "resume"
+      ],
+      "x-phase0-authorship": "user",
+      "properties": {
+        "queueName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Kueue queue name.",
+          "x-phase0-authorship": "user"
+        },
+        "workloadPriorityClassName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workload priority class name used for admission and preemption policy.",
+          "x-phase0-authorship": "user"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "checkpoint": {
+          "$ref": "#/$defs/checkpoint"
+        },
+        "resume": {
+          "$ref": "#/$defs/resume"
+        },
+        "control": {
+          "$ref": "#/$defs/control"
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image",
+        "codeVersion",
+        "worldSize",
+        "gpuShape"
+      ],
+      "x-phase0-authorship": "user",
+      "properties": {
+        "image": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Declared training image identity used for compatibility checks.",
+          "x-phase0-authorship": "user"
+        },
+        "codeVersion": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Declared user code version used for compatibility checks.",
+          "x-phase0-authorship": "user"
+        },
+        "worldSize": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Declared total world size. v1 requires an exact match on resume.",
+          "x-phase0-authorship": "user"
+        },
+        "gpuShape": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Declared GPU shape. v1 requires an exact match on resume.",
+          "x-phase0-authorship": "user"
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "optimizerMode",
+        "shardingMode"
+      ],
+      "x-phase0-authorship": "user",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "DDP",
+            "FSDP"
+          ],
+          "description": "Supported distributed execution mode.",
+          "x-phase0-authorship": "user"
+        },
+        "optimizerMode": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Declared optimizer-state mode. v1 requires an exact match on resume.",
+          "x-phase0-authorship": "user"
+        },
+        "shardingMode": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Declared sharding mode. v1 requires an exact match on resume.",
+          "x-phase0-authorship": "user"
+        },
+        "templateRef": {
+          "$ref": "#/$defs/runtimeTemplateRef"
+        },
+        "template": {
+          "$ref": "#/$defs/runtimeTemplate"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "templateRef"
+          ],
+          "not": {
+            "required": [
+              "template"
+            ]
+          }
+        },
+        {
+          "required": [
+            "template"
+          ],
+          "not": {
+            "required": [
+              "templateRef"
+            ]
+          }
+        }
+      ]
+    },
+    "runtimeTemplateRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "x-phase0-authorship": "user",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Reference to a platform-managed JobSet-compatible runtime template."
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional namespace for the referenced template."
+        }
+      }
+    },
+    "runtimeTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "spec"
+      ],
+      "x-phase0-authorship": "user",
+      "properties": {
+        "apiVersion": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Illustrative JobSet apiVersion."
+        },
+        "kind": {
+          "type": "string",
+          "const": "JobSet",
+          "description": "Only JobSet-compatible runtime templates are in scope for v1."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "labels": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "annotations": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "spec": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Conceptual JobSet-compatible template payload. Phase 0 does not standardize the nested schema.",
+          "additionalProperties": true
+        }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "storageURI",
+        "interval",
+        "freshnessBudget",
+        "maxDrainTime",
+        "safePointMode"
+      ],
+      "x-phase0-authorship": "user",
+      "properties": {
+        "storageURI": {
+          "type": "string",
+          "pattern": "^s3://.+",
+          "description": "S3-compatible checkpoint storage URI.",
+          "x-phase0-authorship": "user"
+        },
+        "interval": {
+          "$ref": "#/$defs/durationString"
+        },
+        "freshnessBudget": {
+          "$ref": "#/$defs/durationString"
+        },
+        "maxDrainTime": {
+          "$ref": "#/$defs/durationString"
+        },
+        "safePointMode": {
+          "type": "string",
+          "const": "StepBoundary",
+          "description": "Fixed safe-point mode for v1.",
+          "x-phase0-authorship": "user"
+        }
+      }
+    },
+    "resume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourcePolicy",
+        "maxResumeRetries"
+      ],
+      "x-phase0-authorship": "user",
+      "properties": {
+        "sourcePolicy": {
+          "type": "string",
+          "const": "LatestCompatibleComplete",
+          "description": "Fixed resume-source policy for v1.",
+          "x-phase0-authorship": "user"
+        },
+        "maxResumeRetries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum controller-managed resume retries before the RTJ fails.",
+          "x-phase0-authorship": "user"
+        }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "x-phase0-authorship": "user",
+      "properties": {
+        "desiredState": {
+          "type": "string",
+          "enum": [
+            "Running",
+            "Paused"
+          ],
+          "description": "Optional declarative manual control surface.",
+          "x-phase0-authorship": "user"
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "conditions",
+        "currentRunAttempt",
+        "selectedCheckpoint",
+        "lastCompletedCheckpoint",
+        "transitionTimestamps",
+        "reason",
+        "message"
+      ],
+      "x-phase0-authorship": "controller-and-derived",
+      "properties": {
+        "phase": {
+          "type": "string",
+          "enum": [
+            "Pending",
+            "Queued",
+            "Admitted",
+            "Starting",
+            "Running",
+            "YieldRequested",
+            "Draining",
+            "Paused",
+            "Restoring",
+            "Succeeded",
+            "Failed"
+          ],
+          "x-phase0-authorship": "derived"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/condition"
+          },
+          "x-phase0-authorship": "controller"
+        },
+        "currentRunAttempt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Current or most recent runtime attempt number.",
+          "x-phase0-authorship": "controller"
+        },
+        "selectedCheckpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/checkpointStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-phase0-authorship": "derived"
+        },
+        "lastCompletedCheckpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/checkpointStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-phase0-authorship": "derived"
+        },
+        "transitionTimestamps": {
+          "$ref": "#/$defs/transitionTimestamps"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-phase0-authorship": "controller"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 4096,
+          "x-phase0-authorship": "controller"
+        },
+        "observedGeneration": {
+          "type": "integer",
+          "minimum": 0,
+          "x-phase0-authorship": "controller"
+        }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "status",
+        "reason",
+        "message",
+        "lastTransitionTime"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "True",
+            "False",
+            "Unknown"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "observedGeneration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastTransitionTime": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "checkpointStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "storageURI",
+        "completionTime",
+        "sourceRunAttempt",
+        "compatibilityState",
+        "compatibilityReason"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "storageURI": {
+          "type": "string",
+          "pattern": "^s3://.+"
+        },
+        "completionTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sourceRunAttempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "compatibilityState": {
+          "type": "string",
+          "enum": [
+            "Compatible",
+            "Incompatible",
+            "Unknown"
+          ]
+        },
+        "compatibilityReason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "transitionTimestamps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lastTransitionTime"
+      ],
+      "x-phase0-authorship": "derived",
+      "properties": {
+        "lastTransitionTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "queuedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "admittedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "startingAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "runningAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "yieldRequestedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "drainingAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "lastCheckpointCompletedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "pausedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "restoringAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "restoreCompletedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "succeededAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "failedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "durationString": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(s|m|h)$",
+      "description": "Conceptual bounded duration string using whole seconds, minutes, or hours.",
+      "x-phase0-authorship": "user"
+    }
+  }
+}

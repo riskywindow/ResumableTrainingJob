@@ -1,0 +1,52 @@
+# Phase 3 Kueue manager configuration.
+#
+# Identical to the Phase 2 config with one documentation difference:
+# Phase 3 uses ResourceFlavors with nodeLabels and tolerations.
+# The Kueue config itself does not change; the flavor-aware behavior comes
+# from the ResourceFlavor objects and ClusterQueue resourceGroups.
+#
+# PartialAdmission feature gate is Beta/default-on in Kueue v0.15.1,
+# so no explicit feature gate configuration is needed here.
+apiVersion: config.kueue.x-k8s.io/v1beta2
+kind: Configuration
+health:
+  healthProbeBindAddress: :8081
+metrics:
+  bindAddress: :8443
+  enableClusterQueueResources: true
+webhook:
+  port: 9443
+leaderElection:
+  leaderElect: true
+  resourceName: c1f6bfd2.kueue.x-k8s.io
+controller:
+  groupKindConcurrency:
+    Job.batch: 5
+    Pod: 5
+    Workload.kueue.x-k8s.io: 5
+    LocalQueue.kueue.x-k8s.io: 1
+    ClusterQueue.kueue.x-k8s.io: 1
+    ResourceFlavor.kueue.x-k8s.io: 1
+clientConnection:
+  qps: 50
+  burst: 100
+manageJobsWithoutQueueName: false
+managedJobsNamespaceSelector:
+  matchLabels:
+    checkpoint-native.dev/kueue-managed: "true"
+integrations:
+  frameworks:
+    - "batch/job"
+    - "kubeflow.org/mpijob"
+    - "ray.io/rayjob"
+    - "ray.io/raycluster"
+    - "jobset.x-k8s.io/jobset"
+    - "kubeflow.org/paddlejob"
+    - "kubeflow.org/pytorchjob"
+    - "kubeflow.org/tfjob"
+    - "kubeflow.org/xgboostjob"
+    - "kubeflow.org/jaxjob"
+    - "trainer.kubeflow.org/trainjob"
+    - "workload.codeflare.dev/appwrapper"
+  externalFrameworks:
+    - ResumableTrainingJob.v1alpha1.training.checkpoint.example.io

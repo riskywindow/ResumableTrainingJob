@@ -1,0 +1,356 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: resumabletrainingjobs.training.checkpoint.example.io
+spec:
+  group: training.checkpoint.example.io
+  names:
+    kind: ResumableTrainingJob
+    listKind: ResumableTrainingJobList
+    plural: resumabletrainingjobs
+    singular: resumabletrainingjob
+    shortNames:
+      - rtj
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Desired
+          type: string
+          jsonPath: .spec.control.desiredState
+        - name: Suspended
+          type: boolean
+          jsonPath: .spec.suspend
+        - name: Queue
+          type: string
+          jsonPath: .spec.queueName
+        - name: Attempt
+          type: integer
+          jsonPath: .status.currentRunAttempt
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - queueName
+                - workloadPriorityClassName
+                - identity
+                - runtime
+                - checkpoint
+                - resume
+              properties:
+                suspend:
+                  type: boolean
+                queueName:
+                  type: string
+                  minLength: 1
+                workloadPriorityClassName:
+                  type: string
+                  minLength: 1
+                identity:
+                  type: object
+                  required:
+                    - image
+                    - codeVersion
+                    - worldSize
+                    - gpuShape
+                  properties:
+                    image:
+                      type: string
+                      minLength: 1
+                    codeVersion:
+                      type: string
+                      minLength: 1
+                    worldSize:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                    gpuShape:
+                      type: string
+                      minLength: 1
+                runtime:
+                  type: object
+                  required:
+                    - mode
+                    - optimizerMode
+                    - shardingMode
+                    - template
+                  properties:
+                    mode:
+                      type: string
+                      enum:
+                        - DDP
+                        - FSDP
+                    optimizerMode:
+                      type: string
+                      minLength: 1
+                    shardingMode:
+                      type: string
+                      minLength: 1
+                    template:
+                      type: object
+                      required:
+                        - spec
+                      properties:
+                        apiVersion:
+                          type: string
+                        kind:
+                          type: string
+                          enum:
+                            - JobSet
+                        metadata:
+                          type: object
+                          properties:
+                            labels:
+                              type: object
+                              additionalProperties:
+                                type: string
+                            annotations:
+                              type: object
+                              additionalProperties:
+                                type: string
+                        spec:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                checkpoint:
+                  type: object
+                  required:
+                    - storageURI
+                    - interval
+                    - freshnessBudget
+                    - maxDrainTime
+                  properties:
+                    storageURI:
+                      type: string
+                      minLength: 1
+                    interval:
+                      type: string
+                    freshnessBudget:
+                      type: string
+                    maxDrainTime:
+                      type: string
+                    safePointMode:
+                      type: string
+                      enum:
+                        - StepBoundary
+                resume:
+                  type: object
+                  required:
+                    - maxResumeRetries
+                  properties:
+                    sourcePolicy:
+                      type: string
+                      enum:
+                        - LatestCompatibleComplete
+                    maxResumeRetries:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                control:
+                  type: object
+                  properties:
+                    desiredState:
+                      type: string
+                      enum:
+                        - Running
+                        - Paused
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Queued
+                    - Admitted
+                    - Starting
+                    - Running
+                    - YieldRequested
+                    - Draining
+                    - Paused
+                    - Restoring
+                    - Succeeded
+                    - Failed
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - reason
+                      - message
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                workloadReference:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    apiVersion:
+                      type: string
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                      minLength: 1
+                    namespace:
+                      type: string
+                admittedClusterQueue:
+                  type: string
+                currentSuspension:
+                  type: object
+                  required:
+                    - suspended
+                  properties:
+                    suspended:
+                      type: boolean
+                    source:
+                      type: string
+                      enum:
+                        - Kueue
+                        - Manual
+                        - Unknown
+                    reason:
+                      type: string
+                    message:
+                      type: string
+                    observedAt:
+                      type: string
+                      format: date-time
+                currentRunAttempt:
+                  type: integer
+                  format: int32
+                pauseRequestID:
+                  type: string
+                activeJobSetName:
+                  type: string
+                activeControlConfigMapName:
+                  type: string
+                selectedCheckpoint:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    storageURI:
+                      type: string
+                    manifestURI:
+                      type: string
+                    completionTime:
+                      type: string
+                      format: date-time
+                    sourceRunAttempt:
+                      type: integer
+                      format: int32
+                    compatibilityState:
+                      type: string
+                      enum:
+                        - Compatible
+                        - Incompatible
+                        - Unknown
+                    compatibilityReason:
+                      type: string
+                lastCompletedCheckpoint:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    storageURI:
+                      type: string
+                    manifestURI:
+                      type: string
+                    completionTime:
+                      type: string
+                      format: date-time
+                    sourceRunAttempt:
+                      type: integer
+                      format: int32
+                    compatibilityState:
+                      type: string
+                      enum:
+                        - Compatible
+                        - Incompatible
+                        - Unknown
+                    compatibilityReason:
+                      type: string
+                transitionTimestamps:
+                  type: object
+                  properties:
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                    queuedAt:
+                      type: string
+                      format: date-time
+                    admittedAt:
+                      type: string
+                      format: date-time
+                    startingAt:
+                      type: string
+                      format: date-time
+                    runningAt:
+                      type: string
+                      format: date-time
+                    yieldRequestedAt:
+                      type: string
+                      format: date-time
+                    drainingAt:
+                      type: string
+                      format: date-time
+                    lastCheckpointCompletedAt:
+                      type: string
+                      format: date-time
+                    pausedAt:
+                      type: string
+                      format: date-time
+                    restoringAt:
+                      type: string
+                      format: date-time
+                    restoreCompletedAt:
+                      type: string
+                      format: date-time
+                    succeededAt:
+                      type: string
+                      format: date-time
+                    failedAt:
+                      type: string
+                      format: date-time
+                reason:
+                  type: string
+                message:
+                  type: string
+                observedGeneration:
+                  type: integer
+                  format: int64

@@ -1,0 +1,2 @@
+resources:
+  - bases/training.checkpoint.example.io_resumabletrainingjobs.yaml

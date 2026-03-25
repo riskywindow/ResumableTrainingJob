@@ -1,0 +1,108 @@
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: mixtral-fsdp-prod
+  namespace: ml-jobs
+  labels:
+    phase0.example: "true"
+    workload.class: "training"
+  annotations:
+    phase0.note: "Conceptual example only; not a finalized Kubernetes API contract."
+spec:
+  queueName: prod-gpu
+  workloadPriorityClassName: research-high
+  identity:
+    image: registry.example.com/training/mixtral:sha256-a4c1d9e0
+    codeVersion: git:a4c1d9e0
+    worldSize: 16
+    gpuShape: nvidia-h100-80gb
+  runtime:
+    mode: FSDP
+    optimizerMode: adamw
+    shardingMode: fsdp-full-shard
+    template:
+      apiVersion: jobset.x-k8s.io/v1alpha2
+      kind: JobSet
+      metadata:
+        labels:
+          app.kubernetes.io/name: mixtral-fsdp
+      spec:
+        replicatedJobs:
+          - name: trainer
+            replicas: 16
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: trainer
+                    image: registry.example.com/training/mixtral:sha256-a4c1d9e0
+  checkpoint:
+    storageURI: s3://ml-checkpoints/mixtral-fsdp-prod/
+    interval: 600s
+    freshnessBudget: 1200s
+    maxDrainTime: 900s
+    safePointMode: StepBoundary
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 5
+  control:
+    desiredState: Running
+status:
+  phase: Restoring
+  observedGeneration: 4
+  conditions:
+    - type: Admitted
+      status: "True"
+      reason: ResumeAdmissionGranted
+      message: Kueue admitted resume attempt 2.
+      observedGeneration: 4
+      lastTransitionTime: "2026-03-20T17:30:00Z"
+    - type: CheckpointReady
+      status: "True"
+      reason: CompatibleCheckpointSelected
+      message: Latest compatible complete checkpoint was selected for resume.
+      observedGeneration: 4
+      lastTransitionTime: "2026-03-20T17:29:30Z"
+    - type: ResumeReady
+      status: "True"
+      reason: RestoreRequested
+      message: Restore attempt 2 has been requested from the selected checkpoint.
+      observedGeneration: 4
+      lastTransitionTime: "2026-03-20T17:30:05Z"
+    - type: Running
+      status: "False"
+      reason: ResumeInProgress
+      message: Waiting for the new runtime attempt to restore from the selected checkpoint.
+      observedGeneration: 4
+      lastTransitionTime: "2026-03-20T17:30:05Z"
+  currentRunAttempt: 2
+  selectedCheckpoint:
+    id: ckpt-20260320-172900
+    storageURI: s3://ml-checkpoints/mixtral-fsdp-prod/ckpt-20260320-172900/
+    completionTime: "2026-03-20T17:29:00Z"
+    sourceRunAttempt: 1
+    compatibilityState: Compatible
+    compatibilityReason: Exact match on lineage, mode, image, code version, world size, GPU shape, optimizer mode, and sharding mode.
+  lastCompletedCheckpoint:
+    id: ckpt-20260320-172900
+    storageURI: s3://ml-checkpoints/mixtral-fsdp-prod/ckpt-20260320-172900/
+    completionTime: "2026-03-20T17:29:00Z"
+    sourceRunAttempt: 1
+    compatibilityState: Compatible
+    compatibilityReason: Exact match on lineage, mode, image, code version, world size, GPU shape, optimizer mode, and sharding mode.
+  transitionTimestamps:
+    lastTransitionTime: "2026-03-20T17:30:05Z"
+    queuedAt: "2026-03-20T14:58:00Z"
+    admittedAt: "2026-03-20T15:00:00Z"
+    startingAt: "2026-03-20T15:00:10Z"
+    runningAt: "2026-03-20T15:01:00Z"
+    yieldRequestedAt: "2026-03-20T17:20:00Z"
+    drainingAt: "2026-03-20T17:20:10Z"
+    lastCheckpointCompletedAt: "2026-03-20T17:29:00Z"
+    pausedAt: "2026-03-20T17:29:20Z"
+    restoringAt: "2026-03-20T17:30:05Z"
+    restoreCompletedAt: null
+    succeededAt: null
+    failedAt: null
+  reason: ResumeInProgress
+  message: Creating runtime attempt 2 from the latest compatible complete checkpoint.

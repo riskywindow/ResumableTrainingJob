@@ -1,0 +1,41 @@
+# Phase 3 ClusterQueue with two ResourceFlavors.
+#
+# This queue profile exercises flavor-aware admission:
+#   - on-demand: 2 CPU / 2Gi per flavor (stable pool, 2 nodes)
+#   - spot:      2 CPU / 2Gi per flavor (preemptible pool, 2 nodes)
+#
+# Kueue will try flavors in order (on-demand first, then spot).
+# The total quota is intentionally small to make partial admission and
+# preemption scenarios reproducible in kind.
+#
+# This replaces the Phase 2 single-flavor queue for Phase 3 testing.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: phase3-cq
+  labels:
+    checkpoint-native.dev/profile: phase3-flavors
+spec:
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+      flavors:
+        - name: on-demand
+          resources:
+            - name: cpu
+              nominalQuota: 2
+            - name: memory
+              nominalQuota: 2Gi
+        - name: spot
+          resources:
+            - name: cpu
+              nominalQuota: 2
+            - name: memory
+              nominalQuota: 2Gi
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Never

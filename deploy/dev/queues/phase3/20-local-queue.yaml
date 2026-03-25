@@ -1,0 +1,10 @@
+# Phase 3 LocalQueue pointing to the multi-flavor ClusterQueue.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: phase3-training
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: phase3-flavors
+spec:
+  clusterQueue: phase3-cq

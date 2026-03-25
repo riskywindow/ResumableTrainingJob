@@ -1,0 +1,9 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: training
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: priority-preemption
+spec:
+  clusterQueue: checkpoint-dev-cq

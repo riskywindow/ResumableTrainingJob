@@ -1,0 +1,17 @@
+# Phase 3 kind cluster configuration.
+#
+# 4 worker nodes simulate heterogeneous resource pools:
+#   - worker/worker2: labeled as "on-demand" pool (stable, higher priority)
+#   - worker3/worker4: labeled as "spot" pool (preemptible, cheaper)
+#
+# Node labels and taints are applied after creation by label-kind-nodes.sh
+# because kind node configs do not support arbitrary labels/taints at creation
+# time for worker nodes.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+  - role: worker
+  - role: worker

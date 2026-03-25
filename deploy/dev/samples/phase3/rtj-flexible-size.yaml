@@ -1,0 +1,82 @@
+# Phase 3 sample: Flexible-size RTJ with DCP resharding.
+#
+# This RTJ uses the Phase 3 multi-flavor queue (phase3-training).
+# allowWorldSizeChange=true enables DCP resharding on resume when
+# the admitted world size differs from the checkpoint world size.
+#
+# This exercises Goal G3 (world-size-flexible resume via DCP resharding).
+# If Kueue admits fewer/more pods on re-admission, the trainer will
+# use DCP to reshard the checkpoint to the new world size.
+#
+# Placeholders:
+#   __RTJ_NAME__       → RTJ name
+#   __TRAINER_IMAGE__  → trainer container image
+#   __DEV_NAMESPACE__  → target namespace
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase3-training
+    kueue.x-k8s.io/priority-class: phase1-dev
+spec:
+  suspend: true
+  control:
+    desiredState: Running
+  identity:
+    worldSize: 2
+    clusterIdentity: dev
+    rtjIdentity: __RTJ_NAME__
+    runtimeMode: ddp
+    gpuShape: cpu-only
+    imageIdentity: __TRAINER_IMAGE__
+    codeVersion: "1"
+    optimizerMode: sgd
+    shardingMode: none
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3
+    allowWorldSizeChange: true
+  checkpoint:
+    storageUri: s3://rtj-checkpoints
+  runtime:
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: AWS_ACCESS_KEY_ID
+                            value: minioadmin
+                          - name: AWS_SECRET_ACCESS_KEY
+                            value: minioadmin123
+                          - name: AWS_ENDPOINT_URL
+                            value: http://minio.checkpoint-dev.svc.cluster.local:9000
+                          - name: AWS_DEFAULT_REGION
+                            value: us-east-1
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}

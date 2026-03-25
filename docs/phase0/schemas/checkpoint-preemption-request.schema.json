@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/checkpoint-native-preemption-controller/phase0/schemas/checkpoint-preemption-request.schema.json",
+  "title": "CheckpointPreemptionRequest",
+  "description": "Conceptual Phase 0 schema for a checkpoint-first preemption request. This schema is transport-neutral and MAY later be embedded in a CRD or another API surface.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "preemption.checkpoint/v1alpha1"
+    },
+    "kind": {
+      "type": "string",
+      "const": "CheckpointPreemptionRequest"
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/spec"
+    },
+    "status": {
+      "$ref": "#/$defs/status"
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "minLength": 1,
+          "maxLength": 63,
+          "description": "Stable request name."
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "minLength": 1,
+          "maxLength": 63,
+          "description": "Logical namespace for the request and target."
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targetRef",
+        "reason",
+        "mode",
+        "checkpoint",
+        "preemption"
+      ],
+      "properties": {
+        "targetRef": {
+          "$ref": "#/$defs/targetRef"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "capacity-rebalancing",
+            "spot-interruption",
+            "maintenance",
+            "policy-enforcement",
+            "manual"
+          ],
+          "description": "High-level reason for the preemption request."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "CheckpointThenPreempt",
+            "CheckpointOnly"
+          ],
+          "description": "Whether downstream preemption is expected after checkpoint readiness."
+        },
+        "checkpoint": {
+          "$ref": "#/$defs/checkpoint"
+        },
+        "preemption": {
+          "$ref": "#/$defs/preemption"
+        }
+      }
+    },
+    "targetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group",
+        "version",
+        "kind",
+        "namespace",
+        "name"
+      ],
+      "properties": {
+        "group": {
+          "type": "string",
+          "description": "API group for the target workload."
+        },
+        "version": {
+          "type": "string",
+          "description": "API version for the target workload."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Kind for the target workload."
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uid": {
+          "type": "string",
+          "description": "Optional stable UID if the caller needs stronger identity guarantees."
+        }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deadlineSeconds"
+      ],
+      "properties": {
+        "deadlineSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 900,
+          "description": "The request MUST define a bounded checkpoint readiness deadline."
+        },
+        "storageRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Logical storage reference for checkpoint artifacts."
+        },
+        "requiredArtifacts": {
+          "type": "array",
+          "description": "Artifacts that MUST exist before the request is considered ready to preempt.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "memory-image",
+              "container-filesystem-delta",
+              "runtime-metadata"
+            ]
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "preemption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gracePeriodSeconds",
+        "allowDelete"
+      ],
+      "properties": {
+        "gracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300,
+          "description": "Requested grace period after checkpoint readiness."
+        },
+        "allowDelete": {
+          "type": "boolean",
+          "description": "If false, the request is limited to checkpoint readiness and policy evaluation."
+        },
+        "deleteByDeadline": {
+          "type": "boolean",
+          "description": "If true, downstream preemption is expected to complete before the request deadline expires."
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase"
+      ],
+      "properties": {
+        "phase": {
+          "type": "string",
+          "enum": [
+            "Pending",
+            "Rejected",
+            "Checkpointing",
+            "ReadyToPreempt",
+            "Preempted",
+            "Failed",
+            "Expired"
+          ]
+        },
+        "observedGeneration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "lastTransitionTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "checkpointRef": {
+          "type": "string",
+          "description": "Opaque reference to the checkpoint artifact set when readiness is achieved."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: ddp-counter-minimal
+  namespace: default
+spec:
+  queueName: training
+  workloadPriorityClassName: phase1-dev
+  identity:
+    image: ghcr.io/example/pytorch-ddp-counter:phase1
+    codeVersion: git:phase1
+    worldSize: 2
+    gpuShape: cpu
+  runtime:
+    mode: DDP
+    optimizerMode: adamw
+    shardingMode: none
+    template:
+      apiVersion: jobset.x-k8s.io/v1alpha2
+      kind: JobSet
+      spec:
+        replicatedJobs:
+          - name: trainer
+            replicas: 1
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: ghcr.io/example/pytorch-ddp-counter:phase1
+                        command:
+                          - python
+                          - train.py
+  checkpoint:
+    storageURI: s3://phase1-checkpoints/ddp-counter-minimal/
+    interval: 300s
+    freshnessBudget: 600s
+    maxDrainTime: 900s
+    safePointMode: StepBoundary
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3
+  control:
+    desiredState: Running

@@ -1,0 +1,13 @@
+# Phase 3 ResourceFlavor: on-demand pool.
+#
+# Selects kind worker nodes labeled checkpoint-native.dev/pool=on-demand.
+# No toleration needed (on-demand nodes have no taints).
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: on-demand
+  labels:
+    checkpoint-native.dev/profile: phase3-flavors
+spec:
+  nodeLabels:
+    checkpoint-native.dev/pool: "on-demand"

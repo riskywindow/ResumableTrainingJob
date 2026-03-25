@@ -1,0 +1,65 @@
+# Phase 3 Experimental Profile: Partial Admission for RTJ
+#
+# This configuration extends the Phase 2 Kueue config to support experimental
+# partial admission for ResumableTrainingJob.
+#
+# Prerequisites:
+#   - Kueue v0.15.1 with PartialAdmission feature gate enabled.
+#     PartialAdmission is Beta and default-on in Kueue v0.15.1, so no explicit
+#     --feature-gates flag is needed unless it has been explicitly disabled.
+#   - The RTJ operator must be started with --enable-experimental-partial-admission.
+#   - Each RTJ that wants partial admission must set:
+#       spec.parallelism.enablePartialAdmission: true
+#       spec.parallelism.minCount: <minimum acceptable worker pods>
+#       spec.resume.allowWorldSizeChange: true
+#
+# How it works:
+#   1. The RTJ operator synthesizes PodSet.MinCount on the worker pod set.
+#   2. Kueue's generic reconciler creates a Workload with the MinCount.
+#   3. Kueue may admit fewer pods than PodSet.Count (but >= MinCount).
+#   4. The admitted count flows through the bridge annotation to the controller.
+#   5. The controller renders the child JobSet with the admitted replica count.
+#
+apiVersion: config.kueue.x-k8s.io/v1beta2
+kind: Configuration
+health:
+  healthProbeBindAddress: :8081
+metrics:
+  bindAddress: :8443
+  enableClusterQueueResources: true
+webhook:
+  port: 9443
+leaderElection:
+  leaderElect: true
+  resourceName: c1f6bfd2.kueue.x-k8s.io
+controller:
+  groupKindConcurrency:
+    Job.batch: 5
+    Pod: 5
+    Workload.kueue.x-k8s.io: 5
+    LocalQueue.kueue.x-k8s.io: 1
+    ClusterQueue.kueue.x-k8s.io: 1
+    ResourceFlavor.kueue.x-k8s.io: 1
+clientConnection:
+  qps: 50
+  burst: 100
+manageJobsWithoutQueueName: false
+managedJobsNamespaceSelector:
+  matchLabels:
+    checkpoint-native.dev/kueue-managed: "true"
+integrations:
+  frameworks:
+    - "batch/job"
+    - "kubeflow.org/mpijob"
+    - "ray.io/rayjob"
+    - "ray.io/raycluster"
+    - "jobset.x-k8s.io/jobset"
+    - "kubeflow.org/paddlejob"
+    - "kubeflow.org/pytorchjob"
+    - "kubeflow.org/tfjob"
+    - "kubeflow.org/xgboostjob"
+    - "kubeflow.org/jaxjob"
+    - "trainer.kubeflow.org/trainjob"
+    - "workload.codeflare.dev/appwrapper"
+  externalFrameworks:
+    - ResumableTrainingJob.v1alpha1.training.checkpoint.example.io
