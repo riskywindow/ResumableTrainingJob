@@ -1,0 +1,53 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: checkpoint-native-preemption-controller-mutating-webhook-configuration
+webhooks:
+  - name: mresumabletrainingjob.kb.io
+    admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: webhook-service
+        namespace: system
+        path: /mutate-training-checkpoint-example-io-v1alpha1-resumabletrainingjob
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups:
+          - training.checkpoint.example.io
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - resumabletrainingjobs
+    sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: checkpoint-native-preemption-controller-validating-webhook-configuration
+webhooks:
+  - name: vresumabletrainingjob.kb.io
+    admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: webhook-service
+        namespace: system
+        path: /validate-training-checkpoint-example-io-v1alpha1-resumabletrainingjob
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups:
+          - training.checkpoint.example.io
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - resumabletrainingjobs
+    sideEffects: None

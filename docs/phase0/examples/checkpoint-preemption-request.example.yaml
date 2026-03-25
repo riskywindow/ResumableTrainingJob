@@ -1,0 +1,33 @@
+apiVersion: preemption.checkpoint/v1alpha1
+kind: CheckpointPreemptionRequest
+metadata:
+  name: trainer-a100-spot-rebalance
+  namespace: ml-jobs
+  labels:
+    phase0.example: "true"
+  annotations:
+    phase0.note: "Conceptual example only; not a concrete Kubernetes API contract."
+spec:
+  targetRef:
+    group: batch.volcano.sh
+    version: v1alpha1
+    kind: Job
+    namespace: ml-jobs
+    name: trainer-a100
+  reason: spot-interruption
+  mode: CheckpointThenPreempt
+  checkpoint:
+    deadlineSeconds: 180
+    storageRef: s3://team-a-checkpoints/trainer-a100/
+    requiredArtifacts:
+      - memory-image
+      - runtime-metadata
+  preemption:
+    gracePeriodSeconds: 30
+    allowDelete: true
+    deleteByDeadline: true
+status:
+  phase: Checkpointing
+  observedGeneration: 1
+  message: Waiting for checkpoint artifacts to satisfy readiness criteria.
+  lastTransitionTime: "2026-03-19T22:00:00Z"

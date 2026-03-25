@@ -1,0 +1,86 @@
+# Phase 3 RTJ template with world-size-flexible resume enabled.
+#
+# Uses the Phase 3 multi-flavor queue (phase3-training).
+# allowWorldSizeChange=true enables DCP resharding on resume when the
+# admitted world size differs from the checkpoint world size.
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: __LOCAL_QUEUE_NAME__
+    kueue.x-k8s.io/priority-class: phase1-dev
+spec:
+  suspend: true
+  queueName: __LOCAL_QUEUE_NAME__
+  workloadPriorityClassName: phase1-dev
+  identity:
+    image: __TRAINER_IMAGE__
+    codeVersion: git:phase3-flexible
+    worldSize: 2
+    gpuShape: cpu
+  runtime:
+    mode: DDP
+    optimizerMode: adamw
+    shardingMode: none
+    template:
+      apiVersion: jobset.x-k8s.io/v1alpha2
+      kind: JobSet
+      metadata:
+        labels:
+          app.kubernetes.io/name: rtj-phase3-flexible
+          app.kubernetes.io/component: trainer
+      spec:
+        replicatedJobs:
+          - name: trainer
+            replicas: 1
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  metadata:
+                    labels:
+                      app.kubernetes.io/name: rtj-phase3-flexible
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        imagePullPolicy: IfNotPresent
+                        command:
+                          - python
+                          - -m
+                          - torch.distributed.run
+                          - --standalone
+                          - --nnodes=1
+                          - --nproc-per-node=2
+                          - /app/fixtures/pytorch_ddp_counter/train.py
+                          - --max-steps
+                          - "1000"
+                          - --sleep-per-step
+                          - "0.2"
+                        env:
+                          - name: YIELD_SDK_CLUSTER_IDENTITY
+                            value: checkpoint-dev
+                        envFrom:
+                          - secretRef:
+                              name: checkpoint-storage-credentials
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+  checkpoint:
+    storageURI: s3://rtj-checkpoints/__RTJ_NAME__/
+    interval: 300s
+    freshnessBudget: 900s
+    maxDrainTime: 180s
+    safePointMode: StepBoundary
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3
+    allowWorldSizeChange: true
+  control:
+    desiredState: Running

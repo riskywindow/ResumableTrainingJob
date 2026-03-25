@@ -1,0 +1,4 @@
+resources:
+  - training_v1alpha1_resumabletrainingjob.yaml
+  - rtj-minimal.yaml
+  - rtj-full.yaml

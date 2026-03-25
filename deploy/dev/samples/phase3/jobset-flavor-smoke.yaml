@@ -1,0 +1,44 @@
+# Phase 3 smoke test: standalone JobSet on flavor-aware queue.
+#
+# This JobSet is Kueue-managed (has queue-name label) and exercises the
+# multi-flavor ClusterQueue. It verifies that:
+#   1. Kueue admits the workload through the Phase 3 queue.
+#   2. Pods land on flavor-selected nodes (check nodeSelector in pod spec).
+#   3. The dev environment flavors and queues are correctly configured.
+#
+# This is a quick infrastructure validation, not an RTJ test.
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: phase3-flavor-smoke
+  namespace: checkpoint-dev
+  labels:
+    kueue.x-k8s.io/queue-name: phase3-training
+    kueue.x-k8s.io/priority-class: phase1-dev
+spec:
+  replicatedJobs:
+    - name: worker
+      replicas: 2
+      template:
+        spec:
+          parallelism: 1
+          completions: 1
+          backoffLimit: 0
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: phase3-flavor-smoke
+                app.kubernetes.io/component: worker
+            spec:
+              restartPolicy: Never
+              containers:
+                - name: sleep
+                  image: busybox:1.36.1
+                  command:
+                    - /bin/sh
+                    - -c
+                    - echo "node=$(hostname), pool=${CHECKPOINT_POOL:-unknown}"; sleep 120
+                  resources:
+                    requests:
+                      cpu: 100m
+                      memory: 128Mi

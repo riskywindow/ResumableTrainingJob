@@ -1,0 +1,8 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: __LOCAL_QUEUE_NAME__
+  namespace: __DEV_NAMESPACE__
+spec:
+  clusterQueue: checkpoint-dev-cq
+  stopPolicy: Hold

@@ -1,0 +1,6 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: phase1-high
+value: 10000
+description: Higher-priority local development class used to trigger deterministic in-queue preemption.

@@ -1,0 +1,32 @@
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: llama2-pretrain
+  namespace: ml-jobs
+  labels:
+    phase0.example: "true"
+  annotations:
+    phase0.note: "Conceptual example only; not a finalized Kubernetes API contract."
+spec:
+  queueName: research-a
+  workloadPriorityClassName: batch-medium
+  identity:
+    image: registry.example.com/training/llama2:sha256-4f3c2b1
+    codeVersion: git:4f3c2b1
+    worldSize: 8
+    gpuShape: nvidia-a100-80gb
+  runtime:
+    mode: DDP
+    optimizerMode: adamw
+    shardingMode: replicated-optimizer-state
+    templateRef:
+      name: pytorch-ddp-8x
+  checkpoint:
+    storageURI: s3://ml-checkpoints/llama2-pretrain/
+    interval: 900s
+    freshnessBudget: 1800s
+    maxDrainTime: 600s
+    safePointMode: StepBoundary
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

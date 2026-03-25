@@ -1,0 +1,18 @@
+# Phase 3 ResourceFlavor: spot pool.
+#
+# Selects kind worker nodes labeled checkpoint-native.dev/pool=spot.
+# Includes a toleration for the spot taint applied by label-kind-nodes.sh.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: spot
+  labels:
+    checkpoint-native.dev/profile: phase3-flavors
+spec:
+  nodeLabels:
+    checkpoint-native.dev/pool: "spot"
+  tolerations:
+    - key: checkpoint-native.dev/spot
+      value: "true"
+      effect: NoSchedule
+      operator: Equal

@@ -1,0 +1,14 @@
+# Phase 3 namespace label update.
+#
+# Applies Phase 3 label to the existing checkpoint-dev namespace.
+# The kueue-managed label is already set in 00-checkpoint-dev.yaml.
+# This file adds the phase3 label for identification without modifying
+# the Phase 2 namespace definition.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: checkpoint-dev
+  labels:
+    checkpoint-native.dev/enabled: "true"
+    checkpoint-native.dev/phase: "phase3"
+    checkpoint-native.dev/kueue-managed: "true"

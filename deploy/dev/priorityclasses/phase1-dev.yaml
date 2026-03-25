@@ -1,0 +1,6 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: phase1-dev
+value: 1000
+description: Low-priority local development class retained for Phase 2 compatibility examples.

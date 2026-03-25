@@ -1,0 +1,24 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: checkpoint-dev-cq
+  labels:
+    checkpoint-native.dev/profile: priority-preemption
+spec:
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+      flavors:
+        - name: default-flavor
+          resources:
+            - name: cpu
+              nominalQuota: 1
+            - name: memory
+              nominalQuota: 1Gi
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Never

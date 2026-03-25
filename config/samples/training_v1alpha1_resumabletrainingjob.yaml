@@ -1,0 +1,44 @@
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: ddp-counter
+  namespace: default
+spec:
+  queueName: training
+  workloadPriorityClassName: batch-medium
+  identity:
+    image: registry.example.com/training/ddp-counter:sha256-1234
+    codeVersion: git:1234
+    worldSize: 2
+    gpuShape: cpu
+  runtime:
+    mode: DDP
+    optimizerMode: adamw
+    shardingMode: none
+    template:
+      apiVersion: jobset.x-k8s.io/v1alpha2
+      kind: JobSet
+      metadata:
+        labels:
+          app.kubernetes.io/name: ddp-counter
+      spec:
+        replicatedJobs:
+          - name: trainer
+            replicas: 2
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: trainer
+                    image: registry.example.com/training/ddp-counter:sha256-1234
+  checkpoint:
+    storageURI: s3://ml-checkpoints/ddp-counter/
+    interval: 300s
+    freshnessBudget: 600s
+    maxDrainTime: 900s
+    safePointMode: StepBoundary
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3
+  control:
+    desiredState: Running
