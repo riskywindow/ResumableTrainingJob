@@ -1,0 +1,89 @@
+# Phase 5 e2e template: RTJ without priority shaping (plain Phase 4 behavior).
+#
+# Used as the competitor workload in protection window tests.
+# No priorityPolicyRef means no priority shaping; Kueue sees the raw
+# WorkloadPriorityClass value only.
+#
+# Placeholders:
+#   __RTJ_NAME__          -> unique RTJ name
+#   __DEV_NAMESPACE__     -> target namespace
+#   __TRAINER_IMAGE__     -> trainer container image
+#   __PRIORITY_CLASS__    -> WorkloadPriorityClass name
+#   __SLEEP_PER_STEP__    -> seconds per training step
+#   __CHECKPOINT_EVERY__  -> steps between checkpoints
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase5-training
+    kueue.x-k8s.io/priority-class: __PRIORITY_CLASS__
+spec:
+  suspend: true
+  queueName: phase5-training
+  workloadPriorityClassName: __PRIORITY_CLASS__
+  control:
+    desiredState: Running
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: cpu-only
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: AWS_ACCESS_KEY_ID
+                            value: minioadmin
+                          - name: AWS_SECRET_ACCESS_KEY
+                            value: minioadmin123
+                          - name: AWS_ENDPOINT_URL
+                            value: http://minio.checkpoint-dev.svc.cluster.local:9000
+                          - name: AWS_DEFAULT_REGION
+                            value: us-east-1
+                          - name: SLEEP_PER_STEP
+                            value: "__SLEEP_PER_STEP__"
+                          - name: CHECKPOINT_EVERY
+                            value: "__CHECKPOINT_EVERY__"
+                          - name: TOTAL_STEPS
+                            value: "100"
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

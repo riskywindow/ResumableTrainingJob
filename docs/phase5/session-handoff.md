@@ -796,19 +796,129 @@ No runtime code was implemented. Infrastructure-only session.
 
 ---
 
-## Recommended Next Prompt (Session 7)
+## Session 7: Phase 5 E2E Test Coverage
 
-**Session 7: Integration tests, lifecycle wiring, and hardening.**
+- Date: 2026-03-26
+
+### Mission
+
+Add deterministic e2e coverage for checkpoint-aware preemption
+protection and later admission. Prefer a few strong deterministic tests
+over many shallow ones.
+
+### Decisions Made
+
+1. **Three e2e tests added.** Two strong deterministic tests plus one
+   integration-style test for yield budget exhaustion:
+   - `TestProtectedPriorityBlocksPreemption` — proves protection
+     window prevents same-tier preemption.
+   - `TestPriorityDropEnablesPreemption` — full lifecycle test:
+     protected → stale → preempted → yielded → resumed.
+   - `TestYieldBudgetExhaustion` — yield budget anti-thrash tracking.
+
+2. **Same-tier protection test uses two phase5-low RTJs.** The
+   protection window prevents checkpoint-staleness-driven priority
+   reduction, not cross-tier preemption. The protection test uses two
+   RTJs at the same base priority (phase5-low, value 100). RTJ A with
+   policy gets effective priority 150 (base + protectedBoost). RTJ B
+   without policy gets raw priority 100. B cannot preempt A (100 < 150).
+
+3. **Lifecycle test uses a fast custom policy.** `e2e-fast-lifecycle`
+   has 15s protection window and 15s freshness target. With trainer
+   CHECKPOINT_EVERY=8 (40s between checkpoints), the checkpoint goes
+   stale at ~55s. This keeps the full lifecycle test under 6 minutes.
+
+4. **Yield budget test uses maxYieldsPerWindow=1.** A single manual
+   pause/resume cycle exhausts the yield budget, allowing quick
+   verification of the anti-thrash mechanism.
+
+5. **Phase 5 helper structs extend the view hierarchy.** `phase5RTJView`
+   includes `priorityShaping` status, annotations, and policy ref.
+   `phase5WorkloadView` includes `Spec.Priority`. Follows the pattern
+   established by `phase3RTJView` and `phase4RTJView`.
+
+6. **Policy fixtures are test-specific, not profile-dependent.** The
+   protection test uses the existing `dev-checkpoint-priority` policy
+   (deployed by `make phase5-up`). The lifecycle and yield budget tests
+   apply their own policies from testdata fixtures and clean them up.
+
+7. **Cross-tier preemption is NOT tested for protection resistance.**
+   Per Session 1.5 (design review), the protection window does NOT
+   prevent Kueue's standard `LowerPriority` preemption by strictly
+   higher-priority workloads. The protection window only prevents
+   additional priority reduction from checkpoint freshness degradation.
+
+### Files Created (Session 7)
+
+- `test/e2e/phase5_helpers_test.go` — Phase 5 test helpers:
+  `phase5RTJView`, `phase5WorkloadView`, `phase5Env`, `setupPhase5Env()`,
+  `getPhase5RTJ()`, `waitForPhase5RTJState()`, `waitForPhase5Phase()`,
+  `getPhase5Workload()`, `findPhase5WorkloadOwnedBy()`,
+  `waitForPhase5WorkloadOwnedBy()`, `assertPriorityShapingState()`,
+  `assertEffectivePriorityAbove()`, `assertEffectivePriorityBelow()`,
+  `cleanupPhase5RTJ()`, `hasPriorityShapingCondition()`
+- `test/e2e/protected_priority_blocks_preemption_test.go` —
+  `TestProtectedPriorityBlocksPreemption` (6-step protection test)
+- `test/e2e/priority_drop_enables_preemption_test.go` —
+  `TestPriorityDropEnablesPreemption` (10-phase lifecycle test),
+  `TestYieldBudgetExhaustion` (4-step yield budget test)
+- `test/e2e/testdata/phase5/rtj-with-policy.yaml` — RTJ template with
+  `priorityPolicyRef` and configurable trainer settings
+- `test/e2e/testdata/phase5/rtj-no-policy.yaml` — RTJ template without
+  policy (Phase 4 backward compat)
+- `test/e2e/testdata/phase5/e2e-fast-lifecycle-policy.yaml` —
+  CheckpointPriorityPolicy with short windows for lifecycle test
+- `docs/phase5/e2e.md` — e2e test documentation, what each test proves,
+  what remains deferred
+
+### Files Modified (Session 7)
+
+- `docs/phase5/index.md` — added e2e.md link to E2E Testing section
+- `docs/phase5/session-handoff.md` — added Session 7 record
+
+### Tests Run
+
+All e2e test files compile cleanly (`go vet ./test/e2e/...` passes).
+No runtime tests were executed (requires Kind cluster with Phase 5
+profile).
+
+Existing unit test suite continues to pass across all packages.
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | Workload.Spec.Priority mutability and GenericJob sync clobbering | Critical — blocks G3 | **Resolved (Session 5):** Kueue sets Spec.Priority at creation time only. The RTJ controller patches it safely afterward. |
+| OQ-2 | Kueue preemption responsiveness to Priority changes | Affects latency of preemption after priority drop | **Resolved (Session 5):** Kueue reads Spec.Priority on each scheduling cycle. Priority changes are visible immediately. |
+| OQ-3 | Checkpoint manifest timestamp source | Affects I/O pattern | **Resolved (Session 3)** |
+| OQ-4 | Priority Shaping Controller placement | Affects code organisation | **Resolved (Session 5):** Inline in RTJ reconciler. |
+| OQ-5 | Negative effective priority values | Affects penalty formula | **Resolved (Session 5):** Kueue handles negative int32 correctly. |
+| OQ-6 | Protection window start time | Affects accuracy | **Resolved (Session 3 + 4)** |
+| OQ-7 | Interaction with ResumeReadiness AdmissionCheck | Affects evaluation scope | **Resolved (Session 5)** |
+| OQ-8 | Priority shaping for queued RTJs | Affects re-admission ordering | **Resolved (Session 3)** |
+| OQ-9 | Yield telemetry wiring into stop/resume flows | Affects yield budget accuracy | Open — `recordYieldForTelemetry()` and `recordResumeForTelemetry()` are implemented but may not yet be called from the main reconciler stop/resume paths. E2e tests will validate once wired. |
+
+---
+
+## Recommended Next Prompt (Session 8)
+
+**Session 8: Lifecycle wiring, test execution, and hardening.**
 
 Steps:
-1. Wire priority state into the stop flow (call `recordYieldForTelemetry()`
-   when a yield is initiated by Kueue suspension).
-2. Wire priority state into the resume flow (call
-   `recordResumeForTelemetry()` when Restoring → Running transition occurs).
-3. Add integration tests that simulate a full lifecycle:
-   - RTJ admitted → Running → checkpoint → priority stays at base
-   - RTJ admitted → Running → checkpoint stale → priority drops
-   - RTJ yielded → Paused → re-admitted → Running → cooldown → priority boosted
-   - RTJ with no policy → priority unchanged throughout lifecycle
-4. Run full test suite and e2e tests.
-5. Update docs/phase5/session-handoff.md.
+1. Wire `recordYieldForTelemetry()` into the Kueue suspension / yield
+   flow in the RTJ reconciler (if not already wired).
+2. Wire `recordResumeForTelemetry()` into the Restoring → Running
+   transition in the RTJ reconciler (if not already wired).
+3. Run `make phase5-up && make phase5-load-images && make phase5-smoke`
+   to validate the dev environment.
+4. Run the Phase 5 e2e tests:
+   ```bash
+   RUN_KIND_E2E=1 PHASE5_TRAINER_IMAGE=<image> go test ./test/e2e/ \
+     -run "TestProtectedPriority|TestPriorityDrop|TestYieldBudget" \
+     -v -timeout 20m
+   ```
+5. Fix any issues discovered during e2e execution.
+6. Run full test suite and verify no regressions.
+7. Update docs/phase5/session-handoff.md.

@@ -1,0 +1,39 @@
+# Phase 5 e2e: fast-cycling CheckpointPriorityPolicy for lifecycle tests.
+#
+# Short windows so the full protection -> active -> stale -> preemptible
+# lifecycle completes in under 2 minutes:
+#
+#   startupProtectionWindow: 15s  -- protection expires quickly.
+#   checkpointFreshnessTarget: 15s -- checkpoints go stale after 15s.
+#   minRuntimeBetweenYields: 5s   -- cooldown clears quickly after resume.
+#
+# With trainer settings SLEEP_PER_STEP=5, CHECKPOINT_EVERY=8:
+#   - Checkpoint interval = 40s (8 steps * 5s/step).
+#   - First checkpoint at ~40s.
+#   - Protection expires at 15s.
+#   - Checkpoint goes stale at ~55s (40s + 15s freshness target).
+#   - Stale window: 55s to 80s (next checkpoint).
+#
+# Priority offsets:
+#   protectedBoost:    +50   -- raises effective priority during protection.
+#   cooldownBoost:     +25   -- smaller boost during post-resume cooldown.
+#   preemptibleOffset: -500  -- large drop when checkpoint is stale.
+#       For phase5-low (base 100), this drops effective to -400.
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: CheckpointPriorityPolicy
+metadata:
+  name: e2e-fast-lifecycle
+spec:
+  startupProtectionWindow: 15s
+  checkpointFreshnessTarget: 15s
+  minRuntimeBetweenYields: 5s
+  protectedBoost: 50
+  cooldownBoost: 25
+  staleCheckpointBoost: 0
+  preemptibleOffset: -500
+  failOpenOnTelemetryLoss: true
+  failOpenOnCheckpointStoreErrors: false
+  maxYieldsPerWindow: 3
+  yieldWindow: 5m
+  minEffectivePriority: -1000
+  maxEffectivePriority: 20000
