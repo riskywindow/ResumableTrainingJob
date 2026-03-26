@@ -412,9 +412,141 @@ The Session 1 design sketch was explicitly marked as preliminary.
 
 ---
 
-## Recommended Next Prompt (Session 4)
+## Session 4: Priority Decision Engine
 
-**Session 4: Resolve OQ-1 and OQ-2, then implement the Priority Shaping Controller.**
+- Date: 2026-03-26
+
+### Mission
+
+Implement the pure checkpoint-aware priority decision engine as a
+deterministic, IO-free policy evaluation function. Does NOT materialize
+effective priority into Workload objects.
+
+### Decisions Made
+
+1. **Eight internal decision states defined.** The engine uses a more
+   granular `DecisionState` enum than the API's 4-value `PreemptionState`:
+   Disabled, StartupProtected, Active, CheckpointStale, CoolingDown,
+   YieldBudgetExhausted, TelemetryUnknown, Preemptible. Each maps to
+   exactly one `PreemptionState` and one priority adjustment, except
+   TelemetryUnknown which branches on the fail-open policy.
+
+2. **Fixed evaluation order with first-match-wins semantics.** The
+   evaluation order is: Disabled → StartupProtected → YieldBudgetExhausted
+   → CoolingDown → TelemetryUnknown → CheckpointStale → Active. This
+   ensures that stronger protections (startup window) override weaker
+   ones (cooldown), and cooldown/yield-budget override staleness checks.
+
+3. **Engine is a pure function with no Kubernetes dependencies beyond API
+   types.** `EvaluationInput` uses plain Go types (`time.Time`, `int32`,
+   `bool`). The controller converts `TelemetrySnapshot` and
+   `metav1.Time` to `EvaluationInput` before calling `Evaluate()`. This
+   prevents circular import dependencies between the policy and controller
+   packages.
+
+4. **Protection window anchor uses max(RunStartTime, LastResumeTime).**
+   The protection window resets on every resume by using the later of the
+   two timestamps. If both are nil (job hasn't started), protection is
+   inactive.
+
+5. **Cooldown is anchored on LastResumeTime only.** First-run jobs (nil
+   LastResumeTime) have no cooldown — the startup protection window
+   handles initial protection. Cooldown only applies after a yield+resume
+   cycle.
+
+6. **CheckpointStale maps to Preemptible state with preemptibleOffset.**
+   When the checkpoint age exceeds the freshness target, the engine
+   transitions the job to Preemptible state. The `staleCheckpointBoost`
+   API field exists for future graduated penalty schemes but is not used
+   in the current evaluation logic.
+
+7. **int64 intermediate computation for overflow safety.** The effective
+   priority calculation uses `int64(basePriority) + int64(adjustment)`
+   before clamping to policy bounds and int32 range.
+
+8. **TelemetryUnknown distinguishes store errors from telemetry loss.**
+   Two separate fail-open flags control the behavior:
+   `failOpenOnCheckpointStoreErrors` for store errors,
+   `failOpenOnTelemetryLoss` for other telemetry unavailability.
+
+### Files Created (Session 4)
+
+- `internal/policy/checkpointpriority/types.go` — `DecisionState` enum (8
+  values), `EvaluationInput` struct, `Decision` struct
+- `internal/policy/checkpointpriority/window.go` — `CheckProtectionWindow()`,
+  `CheckCooldown()`, `IsYieldBudgetExhausted()`,
+  `CheckCheckpointFreshness()`, `ProtectionWindowResult` type
+- `internal/policy/checkpointpriority/decision.go` — `Evaluate()` function,
+  `evaluateTelemetryUnknown()`, `computeEffectivePriority()` with int64
+  overflow-safe clamping, `derefInt32()`, `derefBool()` helpers
+- `internal/policy/checkpointpriority/window_test.go` — 26 tests covering
+  protection window (10 tests), cooldown (6 tests), yield budget (6 tests),
+  checkpoint freshness (6 tests)
+- `internal/policy/checkpointpriority/decision_test.go` — 47 tests covering
+  disabled/no-policy (2), startup protection (5), stale checkpoint (3),
+  cooldown (4), yield budget exhaustion (6), fail-open/fail-closed (6),
+  clamping (6), evaluation order (3), edge cases (4),
+  computeEffectivePriority unit (6), deref helpers (2)
+- `docs/phase5/policy-engine.md` — decision state model, evaluation order,
+  effective priority formula, state-to-adjustment mapping, examples, test
+  coverage summary
+
+### Files Modified (Session 4)
+
+- `docs/phase5/session-handoff.md` — added Session 4 record
+
+### Tests Run
+
+All 73 new Phase 5 policy engine tests pass. Full test suite passes with
+no regressions across all packages:
+- `api/v1alpha1` — pass
+- `internal/admissionchecks/resume` — pass
+- `internal/checkpoints` — pass
+- `internal/controller` — pass
+- `internal/jobset` — pass
+- `internal/kueue` — pass
+- `internal/policy/checkpointpriority` — pass (73 tests)
+- `internal/topology` — pass
+- `test/e2e` — pass
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | Workload.Spec.Priority mutability and GenericJob sync clobbering | Critical — blocks G3 | Open — must inspect Kueue v0.15.1 GenericJob reconciler source |
+| OQ-2 | Kueue preemption responsiveness to Priority changes | Affects latency of preemption after priority drop | Open — review Kueue preemption code path |
+| OQ-3 | Checkpoint manifest timestamp source | Affects I/O pattern | **Resolved (Session 3):** Reuse `status.lastCompletedCheckpoint` first, fall back to `Catalog.LatestCheckpointInfo()` |
+| OQ-4 | Priority Shaping Controller placement | Affects code organisation | **Resolved (Session 4):** Policy engine is a separate package `internal/policy/checkpointpriority/`; controller placement is a separate concern for Session 5 |
+| OQ-5 | Negative effective priority values | Affects penalty formula | Open — verify Kueue handles negative int32 |
+| OQ-6 | Protection window start time | Affects accuracy | **Resolved (Session 3 + 4):** Anchor is `max(RunStartTime, LastResumeTime)`; protection resets on resume |
+| OQ-7 | Interaction with ResumeReadiness AdmissionCheck | Affects evaluation scope | Tentatively resolved: independent concerns |
+| OQ-8 | Priority shaping for queued RTJs | Affects re-admission ordering | **Resolved (Session 3):** `clearPriorityShapingOnQueued()` resets runtime fields; effective priority reverts to base |
+
+### Divergence Notes
+
+**Session 4 notes:**
+
+- The `staleCheckpointBoost` API field is defined in the
+  `CheckpointPriorityPolicySpec` but is not used by the current engine.
+  The engine maps CheckpointStale directly to Preemptible state with
+  `preemptibleOffset`. The `staleCheckpointBoost` field is reserved for
+  future graduated penalty schemes where the engine might distinguish
+  between "slightly stale" (Active with staleCheckpointBoost) and "very
+  stale" (Preemptible with preemptibleOffset).
+
+- The `DecisionPreemptible` state exists in the model but is not currently
+  produced by the evaluation logic. All current paths to the
+  `Preemptible` API state go through `DecisionCheckpointStale` or
+  `DecisionTelemetryUnknown` (fail-closed). The state is reserved for
+  future preemption triggers.
+
+---
+
+## Recommended Next Prompt (Session 5)
+
+**Session 5: Resolve OQ-1 and OQ-2, then implement the Priority Shaping Controller.**
 
 Steps:
 1. Inspect Kueue v0.15.1 GenericJob reconciler source for Priority field
@@ -427,10 +559,11 @@ Steps:
    - Timer-based evaluation loop (e.g., 30s period)
    - Read CheckpointPriorityPolicy referenced by each RTJ
    - Use `CollectTelemetry()` to gather the telemetry snapshot
-   - Compute preemption state using the state machine
-   - Compute effective priority using the formula
+   - Convert `TelemetrySnapshot` to `EvaluationInput`
+   - Call `checkpointpriority.Evaluate()` to compute the decision
    - Write effective priority to Workload.Spec.Priority
    - Use `SyncPriorityShapingTelemetry()` + set preemption state/priority
+     from the Decision output
    - Call `recordYieldForTelemetry()` and `recordResumeForTelemetry()`
      from the main RTJ reconciler at the appropriate lifecycle points
 5. Wire controller into cmd/operator/main.go.
