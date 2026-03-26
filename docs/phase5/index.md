@@ -25,6 +25,11 @@ Build on Phase 4's topology-aware admission pipeline to:
 
 - [api.md](api.md) - CheckpointPriorityPolicy CRD reference, RTJ extensions, validation rules, effective priority formula
 
+### Implementation
+
+- [telemetry.md](telemetry.md) - telemetry fields, data sources, idempotency guarantees, Prometheus metrics
+- [policy-engine.md](policy-engine.md) - decision state model, evaluation order, effective priority formula, test coverage
+
 ### Migration
 
 - [migration-from-phase4.md](migration-from-phase4.md) - what stays, what changes, why effective priority is derived, why cohort/fair-sharing is deferred
