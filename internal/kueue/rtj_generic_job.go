@@ -134,6 +134,21 @@ func (j *RTJGenericJob) GVK() schema.GroupVersionKind {
 	return GroupVersionKind
 }
 
+// PriorityClass returns the WorkloadPriorityClass name for the RTJ. This tells
+// Kueue's GenericJob reconciler which priority class to resolve when creating
+// the Workload. Kueue sets Workload.Spec.Priority from the class value at
+// creation time.
+//
+// Phase 5 note: The RTJ controller owns effective priority materialization.
+// After Kueue creates the Workload with the base priority from the class,
+// the RTJ controller patches Workload.Spec.Priority with the effective
+// priority computed by the checkpoint-aware decision engine. Kueue's
+// GenericJob reconciler does not overwrite Spec.Priority on subsequent
+// reconciles—it only sets it at creation time from the WorkloadPriorityClass.
+func (j *RTJGenericJob) PriorityClass() string {
+	return j.job.Spec.WorkloadPriorityClassName
+}
+
 func (j *RTJGenericJob) decodeTemplateSpec() (rtjjobset.Spec, error) {
 	return rtjjobset.ParseTemplate(j.job.Spec.Runtime.Template.Spec)
 }

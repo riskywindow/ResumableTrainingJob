@@ -42,7 +42,9 @@ type ResumableTrainingJobReconciler struct {
 // +kubebuilder:rbac:groups=training.checkpoint.example.io,resources=resumabletrainingjobs/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloadpriorityclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=training.checkpoint.example.io,resources=checkpointprioritypolicies,verbs=get;list;watch
 
 func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("resumableTrainingJob", req.NamespacedName)
@@ -105,15 +107,33 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 	if activeExists {
 		wasRestoring := job.Status.Phase == trainingv1alpha1.PhaseRestoring
-		if markRunning(&job, now) {
-			if wasRestoring && r.Metrics != nil {
-				r.Metrics.IncResumeSucceeded()
+		statusChanged := markRunning(&job, now)
+		if wasRestoring && r.Metrics != nil {
+			r.Metrics.IncResumeSucceeded()
+		}
+
+		// Phase 5: evaluate priority shaping when the job is in an active phase.
+		var priorityRequeue time.Duration
+		if isActivePriorityPhase(job.Status.Phase) && job.IsPriorityShapingEnabled() {
+			psResult := r.reconcilePriorityState(ctx, &job, now)
+			statusChanged = psResult.StatusChanged || statusChanged
+			if psResult.AnnotationsChanged {
+				if err := r.Update(ctx, &job); err != nil {
+					return ctrl.Result{}, err
+				}
 			}
+			priorityRequeue = psResult.RequeueAfter
+		}
+
+		if statusChanged {
 			if err := r.Status().Update(ctx, &job); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
 		logger.Info("observed active child JobSet", "jobSet", activeJobSet.GetName(), "phase", job.Status.Phase)
+		if priorityRequeue > 0 {
+			return ctrl.Result{RequeueAfter: priorityRequeue}, nil
+		}
 		return ctrl.Result{}, nil
 	}
 
