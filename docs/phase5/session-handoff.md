@@ -708,9 +708,97 @@ All Phase 5 priority state tests pass. Combined with Sessions 3 and 4:
 
 ---
 
-## Recommended Next Prompt (Session 6)
+## Session 6: Local/Dev Profile for Checkpoint-Aware Preemption
 
-**Session 6: Integration tests, e2e manifests, and hardening.**
+- Date: 2026-03-26
+
+### Mission
+
+Create a deterministic local/dev profile for checkpoint-aware preemption
+behaviour. Target within-ClusterQueue lower-priority preemption first.
+Do NOT make cohort borrowing/reclaim or Fair Sharing a required part of
+the core Phase 5 pass.
+
+### Decisions Made
+
+1. **Phase 5 dev profile uses a single ClusterQueue with LowerPriority
+   preemption.** No cohort, no Fair Sharing. The queue quota is small
+   enough (500m CPU / 512Mi) that one RTJ blocks another, making
+   preemption deterministic. See docs/phase5/dev-environment.md for
+   the full rationale.
+
+2. **Two new WorkloadPriorityClasses: phase5-low (100) and phase5-high
+   (10000).** The gap ensures cross-tier preemption is unambiguous even
+   when priority shaping offsets are applied.
+
+3. **One sample CheckpointPriorityPolicy (dev-checkpoint-priority) with
+   short windows.** 30s protection, 60s freshness target, 20s min
+   runtime between yields. Priority offsets: +50 protected, +25
+   cooldown, -500 preemptible. These values make the full lifecycle
+   observable in under 5 minutes.
+
+4. **Two sample RTJs: low-priority and high-priority.** Both reference
+   the same CheckpointPriorityPolicy and queue. Trainer env vars
+   (SLEEP_PER_STEP=5, CHECKPOINT_EVERY=3, TOTAL_STEPS=100) are
+   threaded through the manifests for deterministic timing.
+
+5. **Queue profile disables cohort borrowing/reclaim explicitly.**
+   `reclaimWithinCohort: Never` and `borrowWithinCohort.maxPriorityThreshold: 0`.
+   This keeps the Phase 5 profile focused on within-ClusterQueue
+   preemption driven by effective priority.
+
+6. **Earlier phase profiles are preserved.** Phase 5 resources use
+   distinct names (phase5-cq, phase5-training, phase5-low, phase5-high)
+   that do not conflict with Phase 1-4 resources.
+
+7. **Smoke test validates infrastructure, not RTJ lifecycle.** It
+   checks CRDs, policy, priority classes, queue preemption config,
+   and dry-run RTJ validation. Full e2e is deferred to a later session.
+
+### Files Created (Session 6)
+
+- `deploy/dev/phase5/priorities/00-phase5-low.yaml` — WorkloadPriorityClass
+  (value 100, low base priority for preemptible RTJs)
+- `deploy/dev/phase5/priorities/01-phase5-high.yaml` — WorkloadPriorityClass
+  (value 10000, high base priority for preempting RTJs)
+- `deploy/dev/phase5/queues/10-cluster-queue.yaml` — ClusterQueue
+  (phase5-cq, 500m/512Mi, LowerPriority preemption, no cohort)
+- `deploy/dev/phase5/queues/20-local-queue.yaml` — LocalQueue
+  (phase5-training → phase5-cq)
+- `deploy/dev/phase5/policies/00-dev-checkpoint-priority-policy.yaml` —
+  CheckpointPriorityPolicy (dev-checkpoint-priority, short e2e windows)
+- `deploy/dev/phase5/samples/rtj-low-priority.yaml` — Low-priority RTJ
+  sample with priority shaping and deterministic trainer env vars
+- `deploy/dev/phase5/samples/rtj-high-priority.yaml` — High-priority RTJ
+  sample with priority shaping and deterministic trainer env vars
+- `hack/dev/install-phase5-profile.sh` — Full profile installer (CRDs,
+  priority classes, ResourceFlavor, policy, queue, Kueue config patch)
+- `hack/dev/phase5-profile.sh` — Lightweight profile re-applicator
+- `hack/dev/phase5-smoke.sh` — Infrastructure smoke test (CRDs, policy,
+  priority classes, queue preemption config, RTJ dry-run validation)
+- `docs/phase5/dev-environment.md` — Local dev profile documentation,
+  assumptions, quota design, timing, rationale for excluding cohort and
+  Fair Sharing
+
+### Files Modified (Session 6)
+
+- `Makefile` — added Phase 5 variables (PHASE5_LOW_RTJ_NAME,
+  PHASE5_HIGH_RTJ_NAME, PHASE5_TRAINER_IMAGE) and targets (phase5-up,
+  phase5-down, phase5-status, phase5-load-images, phase5-smoke,
+  phase5-profile)
+- `docs/phase5/index.md` — added dev-environment.md and
+  effective-priority-materialization.md links
+- `docs/phase5/session-handoff.md` — added Session 6 record
+
+### Tests Run
+
+No runtime code was implemented. Infrastructure-only session.
+
+---
+
+## Recommended Next Prompt (Session 7)
+
+**Session 7: Integration tests, lifecycle wiring, and hardening.**
 
 Steps:
 1. Wire priority state into the stop flow (call `recordYieldForTelemetry()`
@@ -722,6 +810,5 @@ Steps:
    - RTJ admitted → Running → checkpoint stale → priority drops
    - RTJ yielded → Paused → re-admitted → Running → cooldown → priority boosted
    - RTJ with no policy → priority unchanged throughout lifecycle
-4. Create local dev/e2e manifests for Phase 5 priority shaping demo.
-5. Run full test suite and e2e tests.
-6. Update docs/phase5/session-handoff.md.
+4. Run full test suite and e2e tests.
+5. Update docs/phase5/session-handoff.md.

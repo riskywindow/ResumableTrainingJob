@@ -1,0 +1,24 @@
+# Phase 5 high base priority class.
+#
+# Used for RTJs that should preempt lower-priority workloads.
+# The value of 10000 is large enough to remain above phase5-low even when
+# phase5-low receives a protectedBoost. This makes within-ClusterQueue
+# LowerPriority preemption deterministic:
+#
+#   phase5-low  base=100   + protectedBoost=50   → effective 150
+#   phase5-high base=10000 + protectedBoost=50   → effective 10050
+#
+# A pending high-priority RTJ always preempts an admitted low-priority RTJ
+# regardless of protection state. The protection window only prevents
+# checkpoint-staleness-driven demotion — it does NOT prevent standard
+# Kueue LowerPriority preemption by a strictly higher-priority workload.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: phase5-high
+  labels:
+    checkpoint-native.dev/profile: phase5-priority-shaping
+value: 10000
+description: >-
+  High base priority for Phase 5 checkpoint-aware preemption testing.
+  RTJs using this class preempt phase5-low regardless of protection state.

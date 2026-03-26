@@ -1,0 +1,106 @@
+# Phase 5 sample: high-priority RTJ with checkpoint-aware priority shaping.
+#
+# This RTJ uses:
+#   - WorkloadPriorityClass: phase5-high (base priority 10000)
+#   - CheckpointPriorityPolicy: dev-checkpoint-priority
+#   - Queue: phase5-training → phase5-cq (LowerPriority preemption)
+#
+# When submitted while a phase5-low RTJ is already admitted, Kueue will:
+#   1. See the pending high-priority workload (base 10000).
+#   2. Compare with the admitted low-priority workload (effective ~100 or less).
+#   3. Preempt the low-priority workload via Kueue's LowerPriority policy.
+#
+# This demonstrates that:
+#   - The protection window on the low-priority RTJ does NOT prevent standard
+#     LowerPriority preemption by a strictly higher-priority workload.
+#   - Checkpoint-aware priority shaping affects same-tier competition, not
+#     cross-tier preemption ordering.
+#
+# Trainer env vars match the low-priority sample for consistency:
+#   SLEEP_PER_STEP=5    — 5 seconds per training step
+#   CHECKPOINT_EVERY=3  — checkpoint every 3 steps
+#   TOTAL_STEPS=100     — run long enough to observe lifecycle
+#
+# Placeholders:
+#   __RTJ_NAME__       -> RTJ name (default: phase5-high-demo)
+#   __TRAINER_IMAGE__  -> trainer container image
+#   __DEV_NAMESPACE__  -> target namespace (default: checkpoint-dev)
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase5-training
+    kueue.x-k8s.io/priority-class: phase5-high
+spec:
+  suspend: true
+  queueName: phase5-training
+  workloadPriorityClassName: phase5-high
+  priorityPolicyRef:
+    name: dev-checkpoint-priority
+  control:
+    desiredState: Running
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: cpu-only
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: AWS_ACCESS_KEY_ID
+                            value: minioadmin
+                          - name: AWS_SECRET_ACCESS_KEY
+                            value: minioadmin123
+                          - name: AWS_ENDPOINT_URL
+                            value: http://minio.checkpoint-dev.svc.cluster.local:9000
+                          - name: AWS_DEFAULT_REGION
+                            value: us-east-1
+                          # Deterministic trainer timing for Phase 5 e2e.
+                          - name: SLEEP_PER_STEP
+                            value: "5"
+                          - name: CHECKPOINT_EVERY
+                            value: "3"
+                          - name: TOTAL_STEPS
+                            value: "100"
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

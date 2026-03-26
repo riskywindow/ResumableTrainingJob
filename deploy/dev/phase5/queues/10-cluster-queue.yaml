@@ -1,0 +1,45 @@
+# Phase 5 ClusterQueue for checkpoint-aware priority shaping.
+#
+# This queue profile exercises within-ClusterQueue LowerPriority preemption
+# driven by the operator's effective priority shaping:
+#
+#   withinClusterQueue: LowerPriority  — a pending workload preempts an
+#       admitted workload with strictly lower Workload.Spec.Priority.
+#   reclaimWithinCohort: Never         — no cohort reclaim (Phase 5 scope).
+#   borrowWithinCohort: Never          — no cohort borrowing (Phase 5 scope).
+#
+# Quota: 500m CPU / 512Mi memory. This is intentionally small so that one
+# RTJ (requesting 250m CPU / 256Mi) fills roughly half the queue. Two RTJs
+# cannot both be admitted simultaneously, forcing Kueue to preempt the
+# lower-priority workload when a higher-priority workload arrives.
+#
+# Phase 5 does NOT use cohort borrowing/reclaim or Fair Sharing. Those
+# features interact with inter-ClusterQueue scheduling and are out of scope
+# for the core checkpoint-aware priority shaping profile. See
+# docs/phase5/dev-environment.md for the rationale.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: phase5-cq
+  labels:
+    checkpoint-native.dev/profile: phase5-priority-shaping
+spec:
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+      flavors:
+        - name: default-flavor
+          resources:
+            - name: cpu
+              nominalQuota: 500m
+            - name: memory
+              nominalQuota: 512Mi
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Never
+    borrowWithinCohort:
+      maxPriorityThreshold: 0

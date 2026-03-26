@@ -1,0 +1,10 @@
+# Phase 5 LocalQueue pointing to the checkpoint-aware priority shaping ClusterQueue.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: phase5-training
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: phase5-priority-shaping
+spec:
+  clusterQueue: phase5-cq

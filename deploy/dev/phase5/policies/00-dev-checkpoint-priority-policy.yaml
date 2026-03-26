@@ -1,0 +1,59 @@
+# Phase 5 sample CheckpointPriorityPolicy for local/e2e testing.
+#
+# Window timings are deliberately short so that a full protection-window →
+# active → stale → preemptible lifecycle can complete in under 5 minutes:
+#
+#   startupProtectionWindow: 30s  — new/resumed jobs are shielded for 30s.
+#   checkpointFreshnessTarget: 60s — checkpoints older than 60s trigger
+#       transition to Preemptible state.
+#   minRuntimeBetweenYields: 20s — a job must run at least 20s between yields.
+#
+# Priority offsets:
+#   protectedBoost:    +50   — small boost during protection window.
+#   cooldownBoost:     +25   — smaller boost during post-resume cooldown.
+#   preemptibleOffset: -500  — large penalty when checkpoint is stale.
+#       For a phase5-low base (100), this drops effective priority to -400,
+#       ensuring the job is preempted by any pending workload with base >= 0.
+#
+# Fail-open policy:
+#   failOpenOnTelemetryLoss: true — keep base priority when telemetry is
+#       temporarily unavailable. Prevents mass demotion on operator restart.
+#   failOpenOnCheckpointStoreErrors: false — treat store errors as
+#       stale-checkpoint evidence (fail-closed).
+#
+# Yield budget:
+#   maxYieldsPerWindow: 3   — no more than 3 yields per 5-minute window.
+#   yieldWindow: 5m         — sliding window for yield counting.
+#
+# Clamping:
+#   minEffectivePriority: -1000 — floor prevents runaway negative priority.
+#   maxEffectivePriority: 20000 — ceiling prevents runaway positive priority.
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: CheckpointPriorityPolicy
+metadata:
+  name: dev-checkpoint-priority
+  labels:
+    checkpoint-native.dev/profile: phase5-priority-shaping
+spec:
+  # Required timing windows (short for e2e).
+  startupProtectionWindow: 30s
+  checkpointFreshnessTarget: 60s
+  minRuntimeBetweenYields: 20s
+
+  # Priority adjustments by state.
+  protectedBoost: 50
+  cooldownBoost: 25
+  staleCheckpointBoost: 0
+  preemptibleOffset: -500
+
+  # Fail-open controls.
+  failOpenOnTelemetryLoss: true
+  failOpenOnCheckpointStoreErrors: false
+
+  # Yield budget.
+  maxYieldsPerWindow: 3
+  yieldWindow: 5m
+
+  # Priority clamping.
+  minEffectivePriority: -1000
+  maxEffectivePriority: 20000
