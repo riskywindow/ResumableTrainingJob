@@ -12,6 +12,7 @@ import (
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
 	"github.com/example/checkpoint-native-preemption-controller/internal/checkpoints"
+	"github.com/example/checkpoint-native-preemption-controller/internal/topology"
 )
 
 type RenderInput struct {
@@ -35,6 +36,10 @@ type RenderInput struct {
 
 	// Phase 3: admitted flavor name for observability (optional).
 	AdmittedFlavor string
+
+	// Phase 4: parsed topology assignment from Kueue TAS. When non-nil,
+	// topology constraints (nodeSelector) are injected into pod templates.
+	TopologyResult *topology.ParseResult
 }
 
 func RenderChildJobSet(input RenderInput) (*Object, error) {
@@ -139,7 +144,25 @@ func RenderChildJobSet(input RenderInput) (*Object, error) {
 		}
 	}
 
+	// Phase 4: inject topology constraints into pod templates when topology
+	// assignment is available.
+	if input.TopologyResult != nil {
+		workerName := resolveWorkerName(input.RTJ, &obj.Spec)
+		if _, err := InjectTopology(&obj.Spec, workerName, input.TopologyResult); err != nil {
+			return nil, fmt.Errorf("inject topology: %w", err)
+		}
+	}
+
 	return obj, nil
+}
+
+// resolveWorkerName determines the worker PodSet name for topology injection.
+func resolveWorkerName(rtj *trainingv1alpha1.ResumableTrainingJob, spec *Spec) string {
+	name := rtj.EffectivePodSetName()
+	if name == "" && len(spec.ReplicatedJobs) > 0 {
+		name = spec.ReplicatedJobs[0].Name
+	}
+	return name
 }
 
 func stripKueueManagementMetadata(meta *metav1.ObjectMeta) {

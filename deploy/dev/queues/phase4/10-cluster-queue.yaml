@@ -1,0 +1,36 @@
+# Phase 4 ClusterQueue with topology-aware flavor and ResumeReadiness admission check.
+#
+# This queue profile exercises the full Phase 4 admission pipeline:
+#   1. Kueue admits the workload with topology-aware placement.
+#   2. ResumeReadiness AdmissionCheck validates checkpoint readiness.
+#   3. The operator materializes topology constraints into the child JobSet.
+#
+# Quota: 4 CPU / 4 Gi across all topology domains (enough for 4 kind workers
+# at ~1 CPU each). Intentionally small to make topology placement observable.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: phase4-cq
+  labels:
+    checkpoint-native.dev/profile: phase4-topology
+spec:
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+      flavors:
+        - name: phase4-topology
+          resources:
+            - name: cpu
+              nominalQuota: 4
+            - name: memory
+              nominalQuota: 4Gi
+  admissionChecksStrategy:
+    admissionChecks:
+      - name: resume-readiness
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Never

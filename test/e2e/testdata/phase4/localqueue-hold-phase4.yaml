@@ -1,0 +1,10 @@
+# Phase 4 LocalQueue with hold policy for admission-gated tests.
+# Points to the Phase 4 topology-aware ClusterQueue.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: __LOCAL_QUEUE_NAME__
+  namespace: __DEV_NAMESPACE__
+spec:
+  clusterQueue: phase4-cq
+  stopPolicy: Hold

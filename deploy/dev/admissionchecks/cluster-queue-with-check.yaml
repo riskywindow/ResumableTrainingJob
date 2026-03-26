@@ -1,0 +1,29 @@
+# Example ClusterQueue with the ResumeReadiness AdmissionCheck enabled.
+# This extends the base checkpoint-dev-cq with admission check gating.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: checkpoint-dev-cq-with-readiness
+  labels:
+    checkpoint-native.dev/profile: resume-readiness
+spec:
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+      flavors:
+        - name: default-flavor
+          resources:
+            - name: cpu
+              nominalQuota: 1
+            - name: memory
+              nominalQuota: 1Gi
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Never
+  admissionChecksStrategy:
+    admissionChecks:
+      - name: resume-readiness

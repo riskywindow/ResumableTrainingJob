@@ -126,6 +126,73 @@ var (
 		},
 	)
 
+	// Phase 4 metrics.
+	launchesBlockedByReadinessGate = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "launches_blocked_by_readiness_gate_total",
+			Help:      "Total launches blocked by the ResumeReadiness admission check gate.",
+		},
+	)
+	readinessGateOutcomes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "readiness_gate_outcomes_total",
+			Help:      "Total readiness gate evaluation outcomes by reason.",
+		},
+		[]string{"reason"},
+	)
+	topologyAwareLaunches = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "topology_aware_launches_total",
+			Help:      "Total launches that used topology-aware placement.",
+		},
+	)
+	topologyAssignmentWaits = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "topology_assignment_waits_total",
+			Help:      "Total times the operator waited for a topology assignment on the Workload.",
+		},
+	)
+	phase4ResumesAttempted = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "phase4_resumes_attempted_total",
+			Help:      "Total resume attempts that went through the Phase 4 gated path.",
+		},
+	)
+	phase4ResumesSucceeded = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "phase4_resumes_succeeded_total",
+			Help:      "Total Phase 4 gated resumes that returned to Running.",
+		},
+	)
+	phase4ResumesFailed = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "phase4_resumes_failed_total",
+			Help:      "Total Phase 4 gated resumes that failed.",
+		},
+	)
+	unsupportedTopologyShapeFailures = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "unsupported_topology_shape_failures_total",
+			Help:      "Total topology assignments that could not be represented in the child JobSet.",
+		},
+	)
+
 	// Phase 3 metrics.
 	admissionComparisons = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -210,6 +277,15 @@ func NewRecorder() *Recorder {
 			kueueSuspensionsObserved,
 			preemptionYieldsCompleted,
 			duplicateChildJobSetPreventions,
+			// Phase 4
+			launchesBlockedByReadinessGate,
+			readinessGateOutcomes,
+			topologyAwareLaunches,
+			topologyAssignmentWaits,
+			phase4ResumesAttempted,
+			phase4ResumesSucceeded,
+			phase4ResumesFailed,
+			unsupportedTopologyShapeFailures,
 			// Phase 3
 			admissionComparisons,
 			reshardRestoresAttempted,
@@ -387,5 +463,64 @@ func (r *Recorder) ObserveResumeWorldSize(checkpointWorldSize, restoreWorldSize 
 	} else {
 		differentSizeResumes.Inc()
 		reshardRestoresAttempted.Inc()
+	}
+}
+
+// Phase 4 recorder methods.
+
+// IncLaunchBlockedByReadinessGate records a launch blocked by the readiness gate.
+func (r *Recorder) IncLaunchBlockedByReadinessGate() {
+	if r != nil {
+		launchesBlockedByReadinessGate.Inc()
+	}
+}
+
+// ObserveReadinessGateOutcome records a readiness gate evaluation outcome.
+func (r *Recorder) ObserveReadinessGateOutcome(reason string) {
+	if r != nil && reason != "" {
+		readinessGateOutcomes.WithLabelValues(reason).Inc()
+	}
+}
+
+// IncTopologyAwareLaunch records a topology-aware launch.
+func (r *Recorder) IncTopologyAwareLaunch() {
+	if r != nil {
+		topologyAwareLaunches.Inc()
+	}
+}
+
+// IncTopologyAssignmentWait records a wait for topology assignment.
+func (r *Recorder) IncTopologyAssignmentWait() {
+	if r != nil {
+		topologyAssignmentWaits.Inc()
+	}
+}
+
+// IncPhase4ResumeAttempted records a Phase 4 gated resume attempt.
+func (r *Recorder) IncPhase4ResumeAttempted() {
+	if r != nil {
+		phase4ResumesAttempted.Inc()
+	}
+}
+
+// IncPhase4ResumeSucceeded records a Phase 4 gated resume success.
+func (r *Recorder) IncPhase4ResumeSucceeded() {
+	if r != nil {
+		phase4ResumesSucceeded.Inc()
+	}
+}
+
+// IncPhase4ResumeFailed records a Phase 4 gated resume failure.
+func (r *Recorder) IncPhase4ResumeFailed() {
+	if r != nil {
+		phase4ResumesFailed.Inc()
+	}
+}
+
+// IncUnsupportedTopologyShapeFailure records a topology shape that could not
+// be represented in the child JobSet.
+func (r *Recorder) IncUnsupportedTopologyShapeFailure() {
+	if r != nil {
+		unsupportedTopologyShapeFailures.Inc()
 	}
 }

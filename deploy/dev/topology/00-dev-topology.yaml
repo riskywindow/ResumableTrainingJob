@@ -1,0 +1,21 @@
+# Phase 4 Topology object for Kueue Topology-Aware Scheduling (TAS).
+#
+# Defines a two-level topology hierarchy used by the kind dev cluster:
+#   Level 0: block  — coarse grouping (e.g., network switch domain)
+#   Level 1: rack   — fine grouping (e.g., physical rack or host group)
+#
+# The kind cluster labels workers with these labels in label-kind-nodes.sh:
+#   topology.example.io/block: block-a | block-b
+#   topology.example.io/rack:  rack-1  | rack-2
+#
+# Layout (4 kind workers):
+#   Block A (block-a) → Rack 1 (rack-1): worker, worker2
+#   Block B (block-b) → Rack 2 (rack-2): worker3, worker4
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Topology
+metadata:
+  name: dev-topology
+spec:
+  levels:
+    - nodeLabel: topology.example.io/block
+    - nodeLabel: topology.example.io/rack

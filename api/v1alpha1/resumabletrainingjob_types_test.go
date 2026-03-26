@@ -500,6 +500,74 @@ func TestDeepCopyRTJWithPhase3Fields(t *testing.T) {
 	}
 }
 
+// --- Phase 5 backward-compatibility and deep copy tests ---
+
+func TestPhase4SpecDecodesWithoutPriorityPolicyRef(t *testing.T) {
+	job := minimalValidRTJ()
+	job.Default()
+
+	// Phase 4 spec has no priorityPolicyRef.
+	if job.Spec.PriorityPolicyRef != nil {
+		t.Fatalf("expected nil priorityPolicyRef for Phase 4 spec")
+	}
+	if err := job.ValidateCreate(); err != nil {
+		t.Fatalf("expected Phase 4 spec to pass validation, got %v", err)
+	}
+}
+
+func TestDeepCopyPriorityPolicyReference(t *testing.T) {
+	orig := &PriorityPolicyReference{Name: "default-shaping"}
+	cp := orig.DeepCopy()
+
+	if cp.Name != "default-shaping" {
+		t.Fatalf("expected name 'default-shaping', got %q", cp.Name)
+	}
+	cp.Name = "other"
+	if orig.Name != "default-shaping" {
+		t.Fatalf("mutating copy affected original")
+	}
+}
+
+func TestDeepCopyRTJWithPhase5Fields(t *testing.T) {
+	now := metav1.Now()
+	job := minimalValidRTJ()
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{Name: "default-shaping"}
+	job.Status.PriorityShaping = &PriorityShapingStatus{
+		BasePriority:                100,
+		EffectivePriority:           80,
+		PreemptionState:             PreemptionStateProtected,
+		PreemptionStateReason:       "WithinProtectionWindow",
+		ProtectedUntil:              &now,
+		LastCompletedCheckpointTime: &now,
+		CheckpointAge:               "5m0s",
+		LastYieldTime:               &now,
+		LastResumeTime:              &now,
+		RecentYieldCount:            1,
+		AppliedPolicyRef:            "default-shaping",
+	}
+
+	cp := job.DeepCopy()
+
+	if cp.Spec.PriorityPolicyRef == nil || cp.Spec.PriorityPolicyRef.Name != "default-shaping" {
+		t.Fatalf("expected priorityPolicyRef to be preserved in deep copy")
+	}
+	if cp.Status.PriorityShaping == nil {
+		t.Fatalf("expected priorityShaping status to be preserved in deep copy")
+	}
+	if cp.Status.PriorityShaping.EffectivePriority != 80 {
+		t.Fatalf("expected effectivePriority 80, got %d", cp.Status.PriorityShaping.EffectivePriority)
+	}
+	if cp.Status.PriorityShaping.PreemptionState != PreemptionStateProtected {
+		t.Fatalf("expected preemptionState Protected, got %s", cp.Status.PriorityShaping.PreemptionState)
+	}
+
+	// Verify independence.
+	cp.Spec.PriorityPolicyRef.Name = "other"
+	if job.Spec.PriorityPolicyRef.Name != "default-shaping" {
+		t.Fatalf("deep copy not independent for policyRef")
+	}
+}
+
 func minimalValidRTJ() *ResumableTrainingJob {
 	return &ResumableTrainingJob{
 		ObjectMeta: metav1.ObjectMeta{

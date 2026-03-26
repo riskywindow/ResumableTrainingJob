@@ -1,0 +1,17 @@
+# Phase 4 ResourceFlavor with topology reference.
+#
+# This flavor enables Kueue TAS (Topology-Aware Scheduling) for workloads
+# admitted through ClusterQueues that reference it. Kueue discovers nodes
+# matching this flavor and groups them by the topology labels defined in
+# the referenced Topology object (dev-topology).
+#
+# No nodeLabels filter — all kind workers are eligible. Topology placement
+# is determined by the block/rack labels on nodes, not by pool labels.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: phase4-topology
+  labels:
+    checkpoint-native.dev/profile: phase4-topology
+spec:
+  topologyName: dev-topology

@@ -1,0 +1,21 @@
+# Sample Kueue AdmissionCheck that uses the ResumeReadiness controller.
+#
+# To use this check, add it to a ClusterQueue's admissionChecksStrategy:
+#
+#   spec:
+#     admissionChecksStrategy:
+#       admissionChecks:
+#         - name: resume-readiness
+#
+# The controller name MUST match the constant in
+# internal/admissionchecks/resume/constants.go.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: AdmissionCheck
+metadata:
+  name: resume-readiness
+spec:
+  controllerName: training.checkpoint.example.io/resume-readiness
+  parameters:
+    apiGroup: training.checkpoint.example.io
+    kind: ResumeReadinessPolicy
+    name: default-resume-readiness

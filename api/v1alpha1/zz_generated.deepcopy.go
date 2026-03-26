@@ -53,6 +53,19 @@ func (in *ControlSpec) DeepCopy() *ControlSpec {
 	return out
 }
 
+func (in *PriorityPolicyReference) DeepCopyInto(out *PriorityPolicyReference) {
+	*out = *in
+}
+
+func (in *PriorityPolicyReference) DeepCopy() *PriorityPolicyReference {
+	if in == nil {
+		return nil
+	}
+	out := new(PriorityPolicyReference)
+	in.DeepCopyInto(out)
+	return out
+}
+
 func (in *SuspensionStatus) DeepCopyInto(out *SuspensionStatus) {
 	*out = *in
 	if in.ObservedAt != nil {
@@ -97,6 +110,19 @@ func (in *EmbeddedObjectMetadata) DeepCopy() *EmbeddedObjectMetadata {
 	return out
 }
 
+func (in *EffectiveLaunchShape) DeepCopyInto(out *EffectiveLaunchShape) {
+	*out = *in
+}
+
+func (in *EffectiveLaunchShape) DeepCopy() *EffectiveLaunchShape {
+	if in == nil {
+		return nil
+	}
+	out := new(EffectiveLaunchShape)
+	in.DeepCopyInto(out)
+	return out
+}
+
 func (in *JobSetTemplate) DeepCopyInto(out *JobSetTemplate) {
 	*out = *in
 	if in.Metadata != nil {
@@ -112,6 +138,23 @@ func (in *JobSetTemplate) DeepCopy() *JobSetTemplate {
 		return nil
 	}
 	out := new(JobSetTemplate)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *LaunchReadinessStatus) DeepCopyInto(out *LaunchReadinessStatus) {
+	*out = *in
+	if in.LastTransitionTime != nil {
+		in, out := &in.LastTransitionTime, &out.LastTransitionTime
+		*out = (*in).DeepCopy()
+	}
+}
+
+func (in *LaunchReadinessStatus) DeepCopy() *LaunchReadinessStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(LaunchReadinessStatus)
 	in.DeepCopyInto(out)
 	return out
 }
@@ -147,6 +190,62 @@ func (in *ParallelismSpec) DeepCopy() *ParallelismSpec {
 	return out
 }
 
+func (in *TopologySpec) DeepCopyInto(out *TopologySpec) {
+	*out = *in
+}
+
+func (in *TopologySpec) DeepCopy() *TopologySpec {
+	if in == nil {
+		return nil
+	}
+	out := new(TopologySpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *TopologyStatus) DeepCopyInto(out *TopologyStatus) {
+	*out = *in
+	if in.Levels != nil {
+		in, out := &in.Levels, &out.Levels
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.Domains != nil {
+		in, out := &in.Domains, &out.Domains
+		*out = make([]TopologyDomainStatus, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *TopologyStatus) DeepCopy() *TopologyStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(TopologyStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *TopologyDomainStatus) DeepCopyInto(out *TopologyDomainStatus) {
+	*out = *in
+	if in.Values != nil {
+		in, out := &in.Values, &out.Values
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+}
+
+func (in *TopologyDomainStatus) DeepCopy() *TopologyDomainStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(TopologyDomainStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
 func (in *AdmissionStatus) DeepCopyInto(out *AdmissionStatus) {
 	*out = *in
 	if in.AdmittedFlavors != nil {
@@ -176,6 +275,35 @@ func (in *RestoreStatus) DeepCopy() *RestoreStatus {
 		return nil
 	}
 	out := new(RestoreStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *PriorityShapingStatus) DeepCopyInto(out *PriorityShapingStatus) {
+	*out = *in
+	if in.ProtectedUntil != nil {
+		in, out := &in.ProtectedUntil, &out.ProtectedUntil
+		*out = (*in).DeepCopy()
+	}
+	if in.LastCompletedCheckpointTime != nil {
+		in, out := &in.LastCompletedCheckpointTime, &out.LastCompletedCheckpointTime
+		*out = (*in).DeepCopy()
+	}
+	if in.LastYieldTime != nil {
+		in, out := &in.LastYieldTime, &out.LastYieldTime
+		*out = (*in).DeepCopy()
+	}
+	if in.LastResumeTime != nil {
+		in, out := &in.LastResumeTime, &out.LastResumeTime
+		*out = (*in).DeepCopy()
+	}
+}
+
+func (in *PriorityShapingStatus) DeepCopy() *PriorityShapingStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(PriorityShapingStatus)
 	in.DeepCopyInto(out)
 	return out
 }
@@ -276,6 +404,16 @@ func (in *ResumableTrainingJobSpec) DeepCopyInto(out *ResumableTrainingJobSpec) 
 		*out = new(ParallelismSpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.Topology != nil {
+		in, out := &in.Topology, &out.Topology
+		*out = new(TopologySpec)
+		**out = **in
+	}
+	if in.PriorityPolicyRef != nil {
+		in, out := &in.PriorityPolicyRef, &out.PriorityPolicyRef
+		*out = new(PriorityPolicyReference)
+		**out = **in
+	}
 	if in.Control != nil {
 		in, out := &in.Control, &out.Control
 		*out = new(ControlSpec)
@@ -331,6 +469,26 @@ func (in *ResumableTrainingJobStatus) DeepCopyInto(out *ResumableTrainingJobStat
 		in, out := &in.Restore, &out.Restore
 		*out = new(RestoreStatus)
 		**out = **in
+	}
+	if in.LaunchReadiness != nil {
+		in, out := &in.LaunchReadiness, &out.LaunchReadiness
+		*out = new(LaunchReadinessStatus)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.Topology != nil {
+		in, out := &in.Topology, &out.Topology
+		*out = new(TopologyStatus)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.EffectiveLaunchShape != nil {
+		in, out := &in.EffectiveLaunchShape, &out.EffectiveLaunchShape
+		*out = new(EffectiveLaunchShape)
+		**out = **in
+	}
+	if in.PriorityShaping != nil {
+		in, out := &in.PriorityShaping, &out.PriorityShaping
+		*out = new(PriorityShapingStatus)
+		(*in).DeepCopyInto(*out)
 	}
 }
 
@@ -419,4 +577,243 @@ func (in *WorkloadReference) DeepCopy() *WorkloadReference {
 	out := new(WorkloadReference)
 	in.DeepCopyInto(out)
 	return out
+}
+
+// --- ResumeReadinessPolicy deep copy ---
+
+func (in *ResumeReadinessPolicySpec) DeepCopyInto(out *ResumeReadinessPolicySpec) {
+	*out = *in
+	if in.RequireCompleteCheckpoint != nil {
+		in, out := &in.RequireCompleteCheckpoint, &out.RequireCompleteCheckpoint
+		*out = new(bool)
+		**out = **in
+	}
+	if in.MaxCheckpointAge != nil {
+		in, out := &in.MaxCheckpointAge, &out.MaxCheckpointAge
+		*out = new(metav1.Duration)
+		**out = **in
+	}
+	if in.AllowInitialLaunchWithoutCheckpoint != nil {
+		in, out := &in.AllowInitialLaunchWithoutCheckpoint, &out.AllowInitialLaunchWithoutCheckpoint
+		*out = new(bool)
+		**out = **in
+	}
+}
+
+func (in *ResumeReadinessPolicySpec) DeepCopy() *ResumeReadinessPolicySpec {
+	if in == nil {
+		return nil
+	}
+	out := new(ResumeReadinessPolicySpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ResumeReadinessPolicyStatus) DeepCopyInto(out *ResumeReadinessPolicyStatus) {
+	*out = *in
+	if in.Conditions != nil {
+		in, out := &in.Conditions, &out.Conditions
+		*out = make([]metav1.Condition, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *ResumeReadinessPolicyStatus) DeepCopy() *ResumeReadinessPolicyStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(ResumeReadinessPolicyStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ResumeReadinessPolicy) DeepCopyInto(out *ResumeReadinessPolicy) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *ResumeReadinessPolicy) DeepCopy() *ResumeReadinessPolicy {
+	if in == nil {
+		return nil
+	}
+	out := new(ResumeReadinessPolicy)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ResumeReadinessPolicy) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *ResumeReadinessPolicyList) DeepCopyInto(out *ResumeReadinessPolicyList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]ResumeReadinessPolicy, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *ResumeReadinessPolicyList) DeepCopy() *ResumeReadinessPolicyList {
+	if in == nil {
+		return nil
+	}
+	out := new(ResumeReadinessPolicyList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ResumeReadinessPolicyList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+// --- CheckpointPriorityPolicy deep copy ---
+
+func (in *CheckpointPriorityPolicySpec) DeepCopyInto(out *CheckpointPriorityPolicySpec) {
+	*out = *in
+	out.CheckpointFreshnessTarget = in.CheckpointFreshnessTarget
+	out.StartupProtectionWindow = in.StartupProtectionWindow
+	out.MinRuntimeBetweenYields = in.MinRuntimeBetweenYields
+	if in.YieldWindow != nil {
+		in, out := &in.YieldWindow, &out.YieldWindow
+		*out = new(metav1.Duration)
+		**out = **in
+	}
+	if in.FailOpenOnTelemetryLoss != nil {
+		in, out := &in.FailOpenOnTelemetryLoss, &out.FailOpenOnTelemetryLoss
+		*out = new(bool)
+		**out = **in
+	}
+	if in.FailOpenOnCheckpointStoreErrors != nil {
+		in, out := &in.FailOpenOnCheckpointStoreErrors, &out.FailOpenOnCheckpointStoreErrors
+		*out = new(bool)
+		**out = **in
+	}
+	if in.ProtectedBoost != nil {
+		in, out := &in.ProtectedBoost, &out.ProtectedBoost
+		*out = new(int32)
+		**out = **in
+	}
+	if in.CooldownBoost != nil {
+		in, out := &in.CooldownBoost, &out.CooldownBoost
+		*out = new(int32)
+		**out = **in
+	}
+	if in.StaleCheckpointBoost != nil {
+		in, out := &in.StaleCheckpointBoost, &out.StaleCheckpointBoost
+		*out = new(int32)
+		**out = **in
+	}
+	if in.PreemptibleOffset != nil {
+		in, out := &in.PreemptibleOffset, &out.PreemptibleOffset
+		*out = new(int32)
+		**out = **in
+	}
+	if in.MinEffectivePriority != nil {
+		in, out := &in.MinEffectivePriority, &out.MinEffectivePriority
+		*out = new(int32)
+		**out = **in
+	}
+	if in.MaxEffectivePriority != nil {
+		in, out := &in.MaxEffectivePriority, &out.MaxEffectivePriority
+		*out = new(int32)
+		**out = **in
+	}
+}
+
+func (in *CheckpointPriorityPolicySpec) DeepCopy() *CheckpointPriorityPolicySpec {
+	if in == nil {
+		return nil
+	}
+	out := new(CheckpointPriorityPolicySpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *CheckpointPriorityPolicyStatus) DeepCopyInto(out *CheckpointPriorityPolicyStatus) {
+	*out = *in
+	if in.Conditions != nil {
+		in, out := &in.Conditions, &out.Conditions
+		*out = make([]metav1.Condition, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *CheckpointPriorityPolicyStatus) DeepCopy() *CheckpointPriorityPolicyStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(CheckpointPriorityPolicyStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *CheckpointPriorityPolicy) DeepCopyInto(out *CheckpointPriorityPolicy) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *CheckpointPriorityPolicy) DeepCopy() *CheckpointPriorityPolicy {
+	if in == nil {
+		return nil
+	}
+	out := new(CheckpointPriorityPolicy)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *CheckpointPriorityPolicy) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *CheckpointPriorityPolicyList) DeepCopyInto(out *CheckpointPriorityPolicyList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]CheckpointPriorityPolicy, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *CheckpointPriorityPolicyList) DeepCopy() *CheckpointPriorityPolicyList {
+	if in == nil {
+		return nil
+	}
+	out := new(CheckpointPriorityPolicyList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *CheckpointPriorityPolicyList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
 }

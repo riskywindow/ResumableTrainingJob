@@ -14,10 +14,16 @@ LOCAL_QUEUE_NAME ?= training
 PHASE3_PROFILE ?= flavors
 PHASE3_RTJ_NAME ?= phase3-demo
 PHASE3_TRAINER_IMAGE ?= $(PHASE2_TRAINER_IMAGE)
+PHASE4_RTJ_NAME ?= phase4-demo
+PHASE4_TRAINER_IMAGE ?= $(PHASE3_TRAINER_IMAGE)
 
 .PHONY: dev-up dev-down dev-status dev-smoke phase2-smoke load-images submit-example pause-example resume-example inspect-example submit-low submit-high inspect-rtj inspect-kueue e2e e2e-phase2
 .PHONY: phase3-up phase3-down phase3-status phase3-load-images phase3-smoke phase3-profile e2e-phase3
 .PHONY: phase3-submit-flavor phase3-submit-flex phase3-inspect-admission phase3-inspect-checkpoints
+.PHONY: phase4-up phase4-down phase4-status phase4-load-images phase4-smoke
+.PHONY: phase4-submit-topology phase4-submit-gated-resume
+.PHONY: phase4-inspect-workload phase4-inspect-admissioncheck phase4-inspect-topology phase4-inspect-checkpoints
+.PHONY: e2e-phase4
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -147,3 +153,110 @@ phase3-profile:
 	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
 	  PHASE3_PROFILE=$(PHASE3_PROFILE) \
 	  ./hack/dev/phase3-profile.sh
+
+# ── Phase 4 targets ──────────────────────────────────────────────────
+#
+# phase4-up:          Create kind cluster with 4 workers, install base
+#                     stack, then apply Phase 4 topology + admission check
+#                     profile. Reuses the Phase 3 kind config (4 workers).
+# phase4-down:        Delete the kind cluster.
+# phase4-status:      Show cluster state including topology, flavors, queues,
+#                     admission checks, and node topology labels.
+# phase4-load-images: Load images into the Phase 4 cluster.
+# phase4-smoke:       Run Phase 4 infrastructure smoke test. Verifies topology
+#                     labels, Kueue Topology object, ResourceFlavor,
+#                     ClusterQueue with admission check, and queue health.
+#
+# The Phase 4 profile exercises:
+#   G1: Topology-aware Workload synthesis (TopologyRequest on PodSets)
+#   G2: Topology-aware runtime materialization (nodeSelector from TAS)
+#   G3: ResumeReadiness AdmissionCheck controller
+#   G4: Admission-gated launch and resume
+#
+# Sample RTJs in deploy/dev/samples/phase4/:
+#   rtj-topology-disabled.yaml    — Phase 3 behavior on Phase 4 queue
+#   rtj-topology-preferred.yaml   — Preferred rack-level placement
+#   rtj-topology-required.yaml    — Required rack-level placement
+#   rtj-resume-readiness-gated.yaml — Admission-check-gated launch
+
+phase4-up:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  KIND_CONFIG_PATH=hack/dev/kind-config-phase3.yaml \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/dev-up.sh
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/install-phase4-profile.sh
+
+phase4-down:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-down.sh
+
+phase4-status:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/status.sh
+	@echo
+	@echo "phase4 node topology:"
+	@kubectl get nodes \
+	  -L topology.example.io/block \
+	  -L topology.example.io/rack \
+	  -L checkpoint-native.dev/pool \
+	  --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || true
+	@echo
+	@echo "phase4 topology:"
+	@kubectl get topologies.kueue.x-k8s.io --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (Topology CRD not available)"
+	@echo
+	@echo "phase4 resource flavors:"
+	@kubectl get resourceflavors.kueue.x-k8s.io --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || true
+	@echo
+	@echo "phase4 queues:"
+	@kubectl get clusterqueues.kueue.x-k8s.io --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || true
+	@kubectl get localqueues.kueue.x-k8s.io -n $(DEV_NAMESPACE) --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || true
+	@echo
+	@echo "phase4 admission checks:"
+	@kubectl get admissionchecks.kueue.x-k8s.io --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+	@echo "phase4 resume readiness policies:"
+	@kubectl get resumereadinesspolicies.training.checkpoint.example.io --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+
+phase4-load-images:
+	@set -euo pipefail; \
+	for image in $(IMAGES); do \
+		echo "loading $$image into kind cluster $(KIND_CLUSTER_NAME)"; \
+		kind load docker-image --name $(KIND_CLUSTER_NAME) "$$image"; \
+	done
+
+phase4-smoke:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/phase4-smoke.sh
+
+# ── Phase 4 demo / inspect targets ─────────────────────────────────
+#
+# phase4-submit-topology:        Submit a topology-aware RTJ.
+#                                 PHASE4_TOPOLOGY_MODE=required (default) | preferred
+# phase4-submit-gated-resume:    Submit an RTJ that exercises the readiness gate.
+# phase4-inspect-workload:       Inspect RTJ + Kueue Workload status.
+# phase4-inspect-admissioncheck: Inspect ResumeReadiness AdmissionCheck + policy.
+# phase4-inspect-topology:       Inspect topology assignment and node placement.
+# phase4-inspect-checkpoints:    Inspect checkpoint evidence used by readiness gate.
+# e2e-phase4:                    Run Phase 4 e2e tests.
+
+PHASE4_TOPOLOGY_MODE ?= required
+
+phase4-submit-topology:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE4_RTJ_NAME=$(PHASE4_RTJ_NAME) PHASE4_TRAINER_IMAGE=$(PHASE4_TRAINER_IMAGE) PHASE4_TOPOLOGY_MODE=$(PHASE4_TOPOLOGY_MODE) ./hack/dev/submit-topology-demo.sh
+
+phase4-submit-gated-resume:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE4_RTJ_NAME=$(PHASE4_RTJ_NAME) PHASE4_TRAINER_IMAGE=$(PHASE4_TRAINER_IMAGE) ./hack/dev/submit-gated-resume-demo.sh
+
+phase4-inspect-workload:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE4_RTJ_NAME=$(PHASE4_RTJ_NAME) ./hack/dev/inspect-workload.sh
+
+phase4-inspect-admissioncheck:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/inspect-admissioncheck.sh
+
+phase4-inspect-topology:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE4_RTJ_NAME=$(PHASE4_RTJ_NAME) ./hack/dev/inspect-topology.sh
+
+phase4-inspect-checkpoints:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE4_RTJ_NAME=$(PHASE4_RTJ_NAME) ./hack/dev/inspect-checkpoints-phase4.sh
+
+e2e-phase4:
+	RUN_KIND_E2E=1 PHASE4_TRAINER_IMAGE=$(PHASE4_TRAINER_IMAGE) go test ./test/e2e -run 'TestResumeReadinessGate|TestTopologyAwareLaunch|TestTopologyAwareResume' -v -timeout 20m
