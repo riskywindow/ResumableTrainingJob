@@ -1,0 +1,53 @@
+# Phase 4 Kueue manager configuration with TopologyAwareScheduling.
+#
+# Extends the Phase 3 config with the TopologyAwareScheduling feature gate
+# explicitly enabled. In Kueue v0.15.1 TAS may already be Beta/default-on,
+# but we enable it explicitly for deterministic behavior in the dev cluster.
+#
+# All other settings are identical to Phase 3: RTJ external framework,
+# manageJobsWithoutQueueName=false, namespace opt-in selector.
+apiVersion: config.kueue.x-k8s.io/v1beta2
+kind: Configuration
+health:
+  healthProbeBindAddress: :8081
+metrics:
+  bindAddress: :8443
+  enableClusterQueueResources: true
+webhook:
+  port: 9443
+leaderElection:
+  leaderElect: true
+  resourceName: c1f6bfd2.kueue.x-k8s.io
+controller:
+  groupKindConcurrency:
+    Job.batch: 5
+    Pod: 5
+    Workload.kueue.x-k8s.io: 5
+    LocalQueue.kueue.x-k8s.io: 1
+    ClusterQueue.kueue.x-k8s.io: 1
+    ResourceFlavor.kueue.x-k8s.io: 1
+clientConnection:
+  qps: 50
+  burst: 100
+manageJobsWithoutQueueName: false
+managedJobsNamespaceSelector:
+  matchLabels:
+    checkpoint-native.dev/kueue-managed: "true"
+featureGates:
+  TopologyAwareScheduling: true
+integrations:
+  frameworks:
+    - "batch/job"
+    - "kubeflow.org/mpijob"
+    - "ray.io/rayjob"
+    - "ray.io/raycluster"
+    - "jobset.x-k8s.io/jobset"
+    - "kubeflow.org/paddlejob"
+    - "kubeflow.org/pytorchjob"
+    - "kubeflow.org/tfjob"
+    - "kubeflow.org/xgboostjob"
+    - "kubeflow.org/jaxjob"
+    - "trainer.kubeflow.org/trainjob"
+    - "workload.codeflare.dev/appwrapper"
+  externalFrameworks:
+    - ResumableTrainingJob.v1alpha1.training.checkpoint.example.io

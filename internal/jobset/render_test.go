@@ -10,6 +10,7 @@ import (
 	kueueconstants "sigs.k8s.io/kueue/pkg/controller/constants"
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
+	"github.com/example/checkpoint-native-preemption-controller/internal/topology"
 )
 
 func TestRenderChildJobSetInjectsOperatorLabelsEnvAndVolumes(t *testing.T) {
@@ -312,6 +313,173 @@ func TestRenderChildJobSetUsesOriginalReplicaCountWhenNoAdmission(t *testing.T) 
 	if *rj.Replicas != 2 {
 		t.Fatalf("expected original 2 replicas to be preserved, got %d", *rj.Replicas)
 	}
+}
+
+// --- Phase 4 Render Tests ---
+
+func TestRenderChildJobSetInjectsTopologyNodeSelector(t *testing.T) {
+	rtj := testRTJ()
+	topoResult := &topology.ParseResult{
+		PodSets: map[string]*topology.PodSetTopology{
+			"trainer": {
+				PodSetName: "trainer",
+				Levels:     []string{"topology.kubernetes.io/zone"},
+				Domains: []topology.DomainAssignment{
+					{
+						Labels: map[string]string{"topology.kubernetes.io/zone": "us-east-1a"},
+						Count:  2,
+					},
+				},
+			},
+		},
+	}
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                  rtj,
+		RunAttempt:           1,
+		JobSetName:           "counter-run-1",
+		ControlConfigMapName: "counter-run-1-control",
+		TopologyResult:       topoResult,
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	pod := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec
+	if pod.NodeSelector == nil {
+		t.Fatal("expected nodeSelector to be set from topology")
+	}
+	if pod.NodeSelector["topology.kubernetes.io/zone"] != "us-east-1a" {
+		t.Fatalf("expected zone us-east-1a in nodeSelector, got %v", pod.NodeSelector)
+	}
+}
+
+func TestRenderChildJobSetPreservesExistingNodeSelectorWithTopology(t *testing.T) {
+	rtj := testRTJWithNodeSelector()
+	topoResult := &topology.ParseResult{
+		PodSets: map[string]*topology.PodSetTopology{
+			"trainer": {
+				PodSetName: "trainer",
+				Levels:     []string{"topology.kubernetes.io/zone"},
+				Domains: []topology.DomainAssignment{
+					{
+						Labels: map[string]string{"topology.kubernetes.io/zone": "us-east-1a"},
+						Count:  2,
+					},
+				},
+			},
+		},
+	}
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                  rtj,
+		RunAttempt:           1,
+		JobSetName:           "counter-run-1",
+		ControlConfigMapName: "counter-run-1-control",
+		TopologyResult:       topoResult,
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	pod := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec
+	if pod.NodeSelector["topology.kubernetes.io/zone"] != "us-east-1a" {
+		t.Fatal("expected topology zone in nodeSelector")
+	}
+	if pod.NodeSelector["cloud.google.com/gke-accelerator"] != "nvidia-tesla-a100" {
+		t.Fatal("expected existing nodeSelector to be preserved")
+	}
+}
+
+func TestRenderChildJobSetFailsForNonRepresentableTopology(t *testing.T) {
+	rtj := testRTJ()
+	topoResult := &topology.ParseResult{
+		PodSets: map[string]*topology.PodSetTopology{
+			"trainer": {
+				PodSetName: "trainer",
+				Levels:     []string{"topology.kubernetes.io/zone"},
+				Domains: []topology.DomainAssignment{
+					{Labels: map[string]string{"topology.kubernetes.io/zone": "us-east-1a"}, Count: 1},
+					{Labels: map[string]string{"topology.kubernetes.io/zone": "us-east-1b"}, Count: 1},
+				},
+			},
+		},
+	}
+
+	_, err := RenderChildJobSet(RenderInput{
+		RTJ:                  rtj,
+		RunAttempt:           1,
+		JobSetName:           "counter-run-1",
+		ControlConfigMapName: "counter-run-1-control",
+		TopologyResult:       topoResult,
+	})
+	if err == nil {
+		t.Fatal("expected error for non-representable topology")
+	}
+}
+
+func TestRenderChildJobSetNoTopologyIsPhase3Behavior(t *testing.T) {
+	rtj := testRTJ()
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                  rtj,
+		RunAttempt:           1,
+		JobSetName:           "counter-run-1",
+		ControlConfigMapName: "counter-run-1-control",
+		// No TopologyResult — Phase 3 behavior.
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	pod := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec
+	if pod.NodeSelector != nil {
+		t.Fatalf("expected no nodeSelector in Phase 3 path, got %v", pod.NodeSelector)
+	}
+}
+
+func TestRenderChildJobSetTopologyAndAdmittedCountsCoexist(t *testing.T) {
+	rtj := testRTJMultiReplica()
+	topoResult := &topology.ParseResult{
+		PodSets: map[string]*topology.PodSetTopology{
+			"trainer": {
+				PodSetName: "trainer",
+				Levels:     []string{"topology.kubernetes.io/zone"},
+				Domains: []topology.DomainAssignment{
+					{Labels: map[string]string{"topology.kubernetes.io/zone": "us-east-1a"}, Count: 4},
+				},
+			},
+		},
+	}
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                  rtj,
+		RunAttempt:           1,
+		JobSetName:           "counter-run-1",
+		ControlConfigMapName: "counter-run-1-control",
+		AdmittedCounts:       map[string]int32{"trainer": 4},
+		OriginalWorldSize:    2,
+		TopologyResult:       topoResult,
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	// Check admitted count applied.
+	rj := rendered.Spec.ReplicatedJobs[0]
+	if rj.Replicas == nil || *rj.Replicas != 4 {
+		t.Fatalf("expected 4 replicas from admitted count, got %v", rj.Replicas)
+	}
+
+	// Check topology nodeSelector applied.
+	pod := rj.Template.Spec.Template.Spec
+	if pod.NodeSelector == nil || pod.NodeSelector["topology.kubernetes.io/zone"] != "us-east-1a" {
+		t.Fatalf("expected topology nodeSelector, got %v", pod.NodeSelector)
+	}
+
+	// Check world size env.
+	container := pod.Containers[0]
+	assertEnvValue(t, container.Env, EnvWorldSize, "4")
 }
 
 func assertEnvNotPresent(t *testing.T, envVars []corev1.EnvVar, name string) {

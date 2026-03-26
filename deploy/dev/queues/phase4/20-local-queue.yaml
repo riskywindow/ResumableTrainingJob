@@ -1,0 +1,10 @@
+# Phase 4 LocalQueue pointing to the topology-aware ClusterQueue.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: phase4-training
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: phase4-topology
+spec:
+  clusterQueue: phase4-cq

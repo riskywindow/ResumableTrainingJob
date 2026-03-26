@@ -67,6 +67,14 @@ func PodSetsFromRTJTemplate(job *trainingv1alpha1.ResumableTrainingJob) ([]kueue
 		}
 	}
 
+	// Phase 4: when topology is enabled, apply topology requests to PodSets.
+	// The worker PodSet gets a TopologyRequest matching the RTJ topology mode.
+	// Non-worker PodSets get topology only when LeaderWorkerColocation is true.
+	if job.IsTopologyEnabled() {
+		workerName := resolveWorkerPodSetName(job, &spec)
+		applyTopologyRequests(podSets, job.Spec.Topology, workerName, &spec)
+	}
+
 	return podSets, nil
 }
 

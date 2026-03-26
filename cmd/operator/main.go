@@ -16,6 +16,7 @@ import (
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
+	resumeac "github.com/example/checkpoint-native-preemption-controller/internal/admissionchecks/resume"
 	"github.com/example/checkpoint-native-preemption-controller/internal/controller"
 	kueueintegration "github.com/example/checkpoint-native-preemption-controller/internal/kueue"
 	operatormetrics "github.com/example/checkpoint-native-preemption-controller/internal/metrics"
@@ -88,6 +89,14 @@ func main() {
 	}
 
 	trainingv1alpha1.SetupResumableTrainingJobWebhookWithManager(mgr)
+	trainingv1alpha1.SetupResumeReadinessPolicyWebhookWithManager(mgr)
+	trainingv1alpha1.SetupCheckpointPriorityPolicyWebhookWithManager(mgr)
+
+	if err := resumeac.Setup(mgr); err != nil {
+		setupLog.Error(err, "unable to setup ResumeReadiness admission check controller")
+		os.Exit(1)
+	}
+
 	kueueintegration.SetExperimentalPartialAdmission(enableExperimentalPartialAdmission)
 	if err := kueueintegration.Setup(context.Background(), mgr); err != nil {
 		setupLog.Error(err, "unable to wire RTJ Kueue integration")
@@ -111,6 +120,8 @@ func main() {
 		"experimentalPartialAdmission", enableExperimentalPartialAdmission,
 		"externalFrameworks", kueueintegration.ExternalFrameworks(),
 		"phase3Metrics", true,
+		"phase4Metrics", true,
+		"resumeReadinessControllerName", resumeac.ControllerName,
 	)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")

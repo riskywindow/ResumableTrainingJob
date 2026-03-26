@@ -23,6 +23,7 @@ const (
 	DefaultMaxResumeRetries   int32 = 3
 	DefaultAllowWorldSizeChange     = false
 	DefaultEnablePartialAdmission   = false
+	DefaultTopologyMode             = TopologyModeDisabled
 )
 
 const (
@@ -111,6 +112,61 @@ const (
 	RestoreModeReshard  RestoreMode = "Reshard"
 )
 
+// TopologyMode indicates the topology placement mode for the worker pod set.
+// +kubebuilder:validation:Enum=Disabled;Required;Preferred;Unconstrained
+type TopologyMode string
+
+const (
+	// TopologyModeDisabled disables topology-aware scheduling. Phase 3 behavior.
+	TopologyModeDisabled TopologyMode = "Disabled"
+	// TopologyModeRequired requires topology placement at the specified level.
+	// Admission fails if placement cannot be satisfied.
+	TopologyModeRequired TopologyMode = "Required"
+	// TopologyModePreferred requests best-effort topology placement.
+	// Kueue tries the specified level but may spread across domains.
+	TopologyModePreferred TopologyMode = "Preferred"
+	// TopologyModeUnconstrained enables topology-aware scheduling but lets
+	// Kueue place pods freely across all available domains.
+	TopologyModeUnconstrained TopologyMode = "Unconstrained"
+)
+
+// ReadinessGateState describes the state of the launch-readiness gate.
+// +kubebuilder:validation:Enum=Pending;Ready;Rejected
+type ReadinessGateState string
+
+const (
+	ReadinessGatePending  ReadinessGateState = "Pending"
+	ReadinessGateReady    ReadinessGateState = "Ready"
+	ReadinessGateRejected ReadinessGateState = "Rejected"
+)
+
+// TopologySpec declares topology placement requirements for the training job.
+// When set with a mode other than Disabled, the operator includes TopologyRequest
+// on Workload PodSets, enabling Kueue's TopologyAwareScheduling.
+type TopologySpec struct {
+	// Mode sets the topology placement mode for the worker pod set.
+	// Disabled: no topology request (Phase 3 behavior).
+	// Required: topology level must be satisfied; admission fails without placement.
+	// Preferred: topology level should be satisfied on best-effort basis.
+	// Unconstrained: topology-aware scheduling is active but Kueue may place freely.
+	// +kubebuilder:validation:Enum=Disabled;Required;Preferred;Unconstrained
+	Mode TopologyMode `json:"mode"`
+
+	// TopologyLevel is the node label key used as the topology domain
+	// (e.g., "topology.kubernetes.io/zone", "kubernetes.io/hostname", or a custom rack label).
+	// Required when mode is Required or Preferred. Ignored when mode is Disabled.
+	// +optional
+	TopologyLevel string `json:"topologyLevel,omitempty"`
+
+	// LeaderWorkerColocation requests that the leader pod (if present in the
+	// template as a separate replicatedJob) is co-located in the same topology
+	// domain as workers. Only meaningful when mode is Required or Preferred
+	// and the template has a separate leader replicatedJob.
+	// Default: false.
+	// +optional
+	LeaderWorkerColocation bool `json:"leaderWorkerColocation,omitempty"`
+}
+
 // ResumableTrainingJobSpec defines the desired state of ResumableTrainingJob.
 type ResumableTrainingJobSpec struct {
 	// Suspend is the Kueue-facing admission gate used by the external jobframework integration.
@@ -143,6 +199,19 @@ type ResumableTrainingJobSpec struct {
 	// worker count from spec.identity.worldSize with no partial admission (Phase 2 behavior).
 	// +optional
 	Parallelism *ParallelismSpec `json:"parallelism,omitempty"`
+
+	// Topology declares topology placement requirements for the training job.
+	// When nil, topology-aware scheduling is disabled (Phase 3 behavior preserved).
+	// +optional
+	Topology *TopologySpec `json:"topology,omitempty"`
+
+	// PriorityPolicyRef is an optional reference to a cluster-scoped
+	// CheckpointPriorityPolicy that configures checkpoint-aware priority
+	// shaping for this RTJ. When nil, no priority shaping is applied and
+	// the RTJ retains its base WorkloadPriorityClass priority throughout
+	// its lifetime (Phase 4 behavior preserved).
+	// +optional
+	PriorityPolicyRef *PriorityPolicyReference `json:"priorityPolicyRef,omitempty"`
 
 	// Control carries the declarative manual pause or resume intent.
 	Control *ControlSpec `json:"control,omitempty"`
@@ -260,6 +329,13 @@ type ParallelismSpec struct {
 	EnablePartialAdmission bool `json:"enablePartialAdmission,omitempty"`
 }
 
+// PriorityPolicyReference is a reference to a cluster-scoped CheckpointPriorityPolicy.
+type PriorityPolicyReference struct {
+	// Name is the name of the CheckpointPriorityPolicy object.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+}
+
 // ControlSpec carries manual desired state.
 type ControlSpec struct {
 	// +optional
@@ -306,6 +382,28 @@ type ResumableTrainingJobStatus struct {
 	// Restore captures details of the most recent checkpoint restore.
 	// +optional
 	Restore *RestoreStatus `json:"restore,omitempty"`
+
+	// LaunchReadiness captures the current pre-launch readiness state.
+	// Set by the ResumeReadiness AdmissionCheck controller when configured.
+	// Nil when the readiness gate is not active or no admission is in progress.
+	// +optional
+	LaunchReadiness *LaunchReadinessStatus `json:"launchReadiness,omitempty"`
+
+	// Topology records the admitted topology assignment from Kueue TAS.
+	// Nil when topology is not enabled or not yet admitted with topology.
+	// +optional
+	Topology *TopologyStatus `json:"topology,omitempty"`
+
+	// EffectiveLaunchShape captures the computed launch shape derived from
+	// admission decisions. Nil before first admission.
+	// +optional
+	EffectiveLaunchShape *EffectiveLaunchShape `json:"effectiveLaunchShape,omitempty"`
+
+	// PriorityShaping captures the checkpoint-aware priority shaping state.
+	// Nil when no CheckpointPriorityPolicy is referenced or the priority
+	// shaping controller has not yet evaluated this RTJ.
+	// +optional
+	PriorityShaping *PriorityShapingStatus `json:"priorityShaping,omitempty"`
 }
 
 // AdmissionStatus captures the admitted shape from Kueue.
@@ -346,6 +444,77 @@ type RestoreStatus struct {
 	// or required DCP resharding due to a world-size change.
 	// +optional
 	RestoreMode RestoreMode `json:"restoreMode,omitempty"`
+}
+
+// LaunchReadinessStatus summarizes the pre-launch readiness state.
+// Populated by the ResumeReadiness AdmissionCheck controller when it is
+// configured on the ClusterQueue. Nil when the readiness gate is not active.
+type LaunchReadinessStatus struct {
+	// Ready indicates whether all pre-launch gates have passed and the RTJ
+	// is ready to launch a child JobSet.
+	Ready bool `json:"ready"`
+
+	// GateState describes the current state of the readiness gate.
+	// +optional
+	GateState ReadinessGateState `json:"gateState,omitempty"`
+
+	// Reason is a machine-readable reason for the current gate state.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Message is a human-readable explanation of the current gate state.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// LastTransitionTime is when the readiness state last changed.
+	// +optional
+	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
+}
+
+// TopologyStatus records the topology assignment from Kueue admission.
+// Nil when topology is not enabled or the workload is not yet admitted
+// with a topology assignment.
+type TopologyStatus struct {
+	// Levels records the topology level keys from the assignment
+	// (e.g., ["topology.kubernetes.io/zone"]).
+	// +optional
+	Levels []string `json:"levels,omitempty"`
+
+	// Domains records the assigned topology domains with pod counts.
+	// +optional
+	Domains []TopologyDomainStatus `json:"domains,omitempty"`
+}
+
+// TopologyDomainStatus records a single assigned topology domain.
+type TopologyDomainStatus struct {
+	// Values are the topology domain values for each level in the Levels list.
+	Values []string `json:"values,omitempty"`
+
+	// Count is the number of pods assigned to this domain.
+	Count int32 `json:"count,omitempty"`
+}
+
+// EffectiveLaunchShape captures the computed shape that will be or was used
+// for the current/next launch attempt. Derived from admission and spec.
+type EffectiveLaunchShape struct {
+	// WorkerCount is the effective number of worker pods for this launch.
+	// +optional
+	WorkerCount int32 `json:"workerCount,omitempty"`
+
+	// WorldSize is the effective world size for this launch
+	// (may differ from spec.identity.worldSize under partial admission).
+	// +optional
+	WorldSize int32 `json:"worldSize,omitempty"`
+
+	// ResumeMode indicates whether this launch is a fresh start or checkpoint restore.
+	// Empty on first launch.
+	// +optional
+	ResumeMode RestoreMode `json:"resumeMode,omitempty"`
+
+	// SelectedCheckpointID is the ID of the checkpoint selected for this launch.
+	// Empty on first launch (no checkpoint to restore).
+	// +optional
+	SelectedCheckpointID string `json:"selectedCheckpointID,omitempty"`
 }
 
 // WorkloadReference points at the Kueue Workload owned for the RTJ.
@@ -480,6 +649,10 @@ func (r *ResumableTrainingJob) Default() {
 	if r.Spec.Runtime.Template.Kind == "" {
 		r.Spec.Runtime.Template.Kind = DefaultJobSetKind
 	}
+	// Phase 4: default topology mode when topology is set but mode is empty.
+	if r.Spec.Topology != nil && r.Spec.Topology.Mode == "" {
+		r.Spec.Topology.Mode = DefaultTopologyMode
+	}
 	r.projectKueueLabels()
 }
 
@@ -612,6 +785,12 @@ func (r *ResumableTrainingJob) validationErrors() field.ErrorList {
 	// Phase 3: parallelism validation
 	allErrs = append(allErrs, r.validateParallelism()...)
 
+	// Phase 4: topology validation
+	allErrs = append(allErrs, r.validateTopology()...)
+
+	// Phase 5: priority policy ref validation
+	allErrs = append(allErrs, r.validatePriorityPolicyRef()...)
+
 	return allErrs
 }
 
@@ -652,6 +831,63 @@ func (r *ResumableTrainingJob) validateParallelism() field.ErrorList {
 	}
 
 	return allErrs
+}
+
+func (r *ResumableTrainingJob) validateTopology() field.ErrorList {
+	var allErrs field.ErrorList
+	t := r.Spec.Topology
+	if t == nil {
+		return allErrs
+	}
+	fldPath := field.NewPath("spec", "topology")
+
+	switch t.Mode {
+	case TopologyModeDisabled, TopologyModeUnconstrained:
+		// TopologyLevel is optional for Disabled and Unconstrained.
+	case TopologyModeRequired, TopologyModePreferred:
+		if strings.TrimSpace(t.TopologyLevel) == "" {
+			allErrs = append(allErrs, field.Required(fldPath.Child("topologyLevel"),
+				"topologyLevel is required when mode is Required or Preferred"))
+		}
+	default:
+		allErrs = append(allErrs, field.NotSupported(fldPath.Child("mode"), t.Mode,
+			[]string{string(TopologyModeDisabled), string(TopologyModeRequired),
+				string(TopologyModePreferred), string(TopologyModeUnconstrained)}))
+	}
+
+	// LeaderWorkerColocation is only meaningful when topology is active.
+	if t.LeaderWorkerColocation && (t.Mode == TopologyModeDisabled) {
+		allErrs = append(allErrs, field.Forbidden(fldPath.Child("leaderWorkerColocation"),
+			"leaderWorkerColocation requires topology mode to be Required, Preferred, or Unconstrained"))
+	}
+
+	return allErrs
+}
+
+func (r *ResumableTrainingJob) validatePriorityPolicyRef() field.ErrorList {
+	var allErrs field.ErrorList
+	ref := r.Spec.PriorityPolicyRef
+	if ref == nil {
+		return allErrs
+	}
+	fldPath := field.NewPath("spec", "priorityPolicyRef")
+
+	if strings.TrimSpace(ref.Name) == "" {
+		allErrs = append(allErrs, field.Required(fldPath.Child("name"),
+			"name is required when priorityPolicyRef is set"))
+	}
+
+	return allErrs
+}
+
+// IsPriorityShapingEnabled returns true when a CheckpointPriorityPolicy is referenced.
+func (r *ResumableTrainingJob) IsPriorityShapingEnabled() bool {
+	return r.Spec.PriorityPolicyRef != nil && strings.TrimSpace(r.Spec.PriorityPolicyRef.Name) != ""
+}
+
+// IsTopologyEnabled returns true when topology-aware scheduling is active.
+func (r *ResumableTrainingJob) IsTopologyEnabled() bool {
+	return r.Spec.Topology != nil && r.Spec.Topology.Mode != TopologyModeDisabled
 }
 
 func trimRawExtension(raw runtime.RawExtension) []byte {
@@ -784,6 +1020,14 @@ func (p ResumeSourcePolicy) String() string {
 
 func (c CompatibilityState) String() string {
 	return string(c)
+}
+
+func (t TopologyMode) String() string {
+	return string(t)
+}
+
+func (g ReadinessGateState) String() string {
+	return string(g)
 }
 
 func (r ResumableTrainingJob) String() string {

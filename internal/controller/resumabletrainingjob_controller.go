@@ -23,7 +23,10 @@ import (
 	operatormetrics "github.com/example/checkpoint-native-preemption-controller/internal/metrics"
 )
 
-const resumableTrainingJobFinalizer = "training.checkpoint.example.io/finalizer"
+const (
+	resumableTrainingJobFinalizer = "training.checkpoint.example.io/finalizer"
+	launchGateRequeueInterval     = 5 * time.Second
+)
 
 // ResumableTrainingJobReconciler reconciles a ResumableTrainingJob object.
 type ResumableTrainingJobReconciler struct {
@@ -39,6 +42,7 @@ type ResumableTrainingJobReconciler struct {
 // +kubebuilder:rbac:groups=training.checkpoint.example.io,resources=resumabletrainingjobs/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch
 
 func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("resumableTrainingJob", req.NamespacedName)
@@ -112,6 +116,62 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 		logger.Info("observed active child JobSet", "jobSet", activeJobSet.GetName(), "phase", job.Status.Phase)
 		return ctrl.Result{}, nil
 	}
+
+	// Phase 4: evaluate pre-launch gates (readiness check, topology).
+	// Only evaluate when features are potentially active (topology enabled or
+	// workload reference present indicating Kueue integration).
+	if job.IsTopologyEnabled() || job.Status.WorkloadReference != nil {
+		gateResult, err := r.evaluateLaunchGates(ctx, &job)
+		if err != nil {
+			return r.failLaunch(ctx, &job, fmt.Sprintf("evaluate launch gates: %v", err))
+		}
+		if gateResult != nil && !gateResult.Ready {
+			changed := syncLaunchReadinessStatus(&job, gateResult)
+			if changed {
+				if err := r.Status().Update(ctx, &job); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			// Phase 4 metrics: record gate block reason.
+			if r.Metrics != nil {
+				r.Metrics.ObserveReadinessGateOutcome(gateResult.Reason)
+				switch gateResult.Reason {
+				case reasonWaitingForReadinessGate, reasonReadinessGateRejected:
+					r.Metrics.IncLaunchBlockedByReadinessGate()
+				case reasonWaitingForTopology:
+					r.Metrics.IncTopologyAssignmentWait()
+				case reasonTopologyNotRepresentable:
+					r.Metrics.IncUnsupportedTopologyShapeFailure()
+				}
+			}
+			logger.Info("launch gated", "reason", gateResult.Reason)
+			return ctrl.Result{RequeueAfter: launchGateRequeueInterval}, nil
+		}
+		// Gates passed — populate status and continue to launch.
+		if gateResult != nil {
+			changed := syncLaunchReadinessStatus(&job, gateResult)
+			workerName := resolveWorkerPodSetNameForJob(&job)
+			changed = syncTopologyStatus(&job, gateResult.TopologyResult, workerName) || changed
+			if changed {
+				if err := r.Status().Update(ctx, &job); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			// Phase 4 metrics: record gate pass and topology-aware launch.
+			if r.Metrics != nil {
+				r.Metrics.ObserveReadinessGateOutcome("Ready")
+				if gateResult.TopologyResult != nil {
+					r.Metrics.IncTopologyAwareLaunch()
+				}
+			}
+			// Store the gate result for the launch/resume paths to use.
+			if r.shouldResume(&job) {
+				return r.reconcileResumeWithGate(ctx, &job, now, gateResult)
+			}
+			return r.reconcileLaunchWithGate(ctx, &job, now, gateResult)
+		}
+	}
+
 	if r.shouldResume(&job) {
 		return r.reconcileResume(ctx, &job, now)
 	}

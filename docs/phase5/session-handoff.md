@@ -1,0 +1,281 @@
+# Session Handoff
+
+- Date: 2026-03-25
+- Scope: Phase 5 design lock for `checkpoint-native preemption controller`
+
+## Session 1: Design Lock
+
+### Decisions Made
+
+1. **Phase 5 scope is locked as five goals:**
+   - G1: Checkpoint-aware effective priority derivation (base priority +
+     checkpoint freshness + yield budget → effective priority).
+   - G2: Yield budgets / protection windows (configurable duration that
+     shields jobs from priority reduction after start/resume).
+   - G3: Effective priority written to Kueue Workload.Spec.Priority
+     (operator owns the field, prevents GenericJob clobbering).
+   - G4: Deterministic within-ClusterQueue preemption profile for local/e2e
+     (single CQ, LowerPriority preemption, two priority classes).
+   - G5: PriorityShapingPolicy CRD for configuration (cluster-scoped,
+     protectionDuration, freshnessThreshold, penaltyStepSize, maxPenalty,
+     evaluationInterval).
+
+2. **RTJ remains the only Kueue-managed admission object.** Child JobSets
+   remain plain runtime resources with no Kueue management metadata.
+   Unchanged from Phase 2/3/4.
+
+3. **Kueue remains the preemption authority.** The operator shapes the
+   effective priority input. Kueue decides preemption. No custom scheduling,
+   no custom victim selection.
+
+4. **The RTJ operator remains the lifecycle owner for yield, checkpoint,
+   and resume.** Priority shaping does not change the yield protocol or
+   checkpoint contract.
+
+5. **RTJ remains the only Kueue-managed object.** The child JobSet remains
+   plain runtime only.
+
+6. **This phase uses effective Workload priority, not custom scheduling.**
+   The operator writes an integer to `Workload.Spec.Priority`. Kueue reads
+   it. No custom scheduling algorithms.
+
+7. **Effective priority is a derived value.** It is computed by the operator
+   from base priority + checkpoint freshness + yield budget state +
+   PriorityShapingPolicy parameters. Users do not set it directly.
+
+8. **Fail-safe: when checkpoint telemetry is unavailable, keep base
+   priority.** No silent demotion on I/O failure.
+
+9. **Protection window resets on resume.** A resumed job gets a fresh
+   protection window from the resume time.
+
+10. **Priority shaping only applies to Running/Starting/Restoring phases.**
+    Queued RTJs are reset to base priority.
+
+11. **Phase 4 behaviour preserved when no PriorityShapingPolicy is
+    attached.** When `spec.priorityPolicyRef` is nil, behaviour is
+    identical to Phase 4.
+
+12. **Cohort-level and fair-sharing priority innovation is deferred.**
+    Phase 5 targets within-ClusterQueue preemption only.
+
+13. **Pinned versions unchanged:** Kueue v0.15.1, JobSet v0.10.1,
+    controller-runtime v0.22.4.
+
+14. **Priority Shaping Controller is a separate controller.** Wired into
+    the existing operator binary, but with its own timer-based reconciliation
+    loop. Not part of the main RTJ reconciler or ResumeReadiness controller.
+
+### Files Created (Session 1)
+
+- `docs/phase5/README.md` — overview and quick context
+- `docs/phase5/index.md` — document index and navigation
+- `docs/phase5/goals.md` — goals, non-goals, success criteria, exit criteria
+- `docs/phase5/architecture.md` — component diagram, three sequence diagrams
+  (protected low-priority RTJ, checkpoint-staleness-driven preemption, later
+  resume), detailed design including effective priority formula, ownership
+  model, controller loop pseudocode
+- `docs/phase5/migration-from-phase4.md` — what stays, what changes in
+  priority handling, why effective priority is derived, why cohort/fair-
+  sharing is deferred, upgrade path
+- `docs/phase5/open-questions.md` — eight open questions with resolution
+  plans and recommendations
+- `docs/phase5/session-handoff.md` — this file
+- `docs/phase5/adr/0001-checkpoint-aware-priority-shaping.md` — Phase 5
+  priority shaping contract (11 decisions, alternatives considered,
+  must-ship demo definition, verification plan)
+
+### Tests Run
+
+No runtime code was implemented. Design-only session.
+
+---
+
+## Session 1.5: Design Review and Consistency Pass
+
+- Date: 2026-03-25
+
+### Decisions Made
+
+1. **Protection window semantics clarified.** The protection window prevents
+   *checkpoint-staleness-driven priority reduction*. It does NOT prevent
+   Kueue's standard `LowerPriority` preemption by strictly higher-priority
+   workloads. A job with base priority 100 inside its protection window will
+   still be preempted by a pending job with priority 1000 — that is standard
+   Kueue behaviour. The protection window's value is in preventing the
+   *additional* demotion that would make same-base-priority competition
+   asymmetric before the job has had time to checkpoint.
+
+2. **Cross-phase doc review completed.** All Phase 0 through Phase 4 docs
+   were read and verified for consistency with Phase 5 design. Key invariants
+   confirmed:
+   - RTJ as only Kueue-managed object (Phase 2 onwards)
+   - Child JobSet as plain runtime (Phase 2 onwards)
+   - Manifest-last checkpoint publication (Phase 0)
+   - Latest-compatible-complete selection (Phase 0)
+   - Fail-closed resume compatibility (Phase 0)
+   - `spec.suspend` vs `spec.control.desiredState` separation (Phase 2)
+   - Pinned versions: Kueue v0.15.1, JobSet v0.10.1, controller-runtime v0.22.4
+
+3. **Design lock confirmed.** All seven docs + ADR 0001 reviewed. No
+   structural changes needed. Two wording fixes applied (see below).
+
+### Files Changed (Session 1.5)
+
+- `docs/phase5/README.md` — fixed line 13: changed "fresh and recent" to
+  "stale" for checkpoint-driven priority reduction. The original wording
+  inverted the causality (fresh checkpoints don't cause demotion; stale ones
+  do).
+- `docs/phase5/goals.md` — fixed G2 acceptance criteria: clarified that the
+  protection window prevents checkpoint-staleness penalty, NOT standard Kueue
+  `LowerPriority` preemption. A strictly higher-priority pending workload
+  can still preempt a protected lower-priority job.
+- `docs/phase5/session-handoff.md` — added Session 1.5 record and updated
+  open issues table.
+
+### Tests Run
+
+No runtime code was implemented. Design review only.
+
+---
+
+## Session 2: CheckpointPriorityPolicy API Implementation
+
+- Date: 2026-03-25
+
+### Decisions Made
+
+1. **CRD named CheckpointPriorityPolicy (not PriorityShapingPolicy).**
+   The name was refined from Session 1's G5 to more precisely describe the
+   policy's scope: it shapes priority based on checkpoint state. Short name
+   `cpp`. This is narrower and more descriptive than the earlier placeholder
+   name.
+
+2. **RTJ field named `spec.priorityPolicyRef` (not `spec.priorityShapingRef`).**
+   Aligns with the CRD rename. The reference is a simple `{name: string}`
+   struct since CheckpointPriorityPolicy is cluster-scoped.
+
+3. **Four preemption states defined:** Protected, Active, Cooldown, Preemptible.
+   These map to the state machine described in the architecture doc. Each state
+   has a corresponding priority adjustment (boost or offset) configurable in
+   the policy.
+
+4. **Priority adjustments are offsets, not absolute values.** The effective
+   priority formula is `clamp(base + adjustment, min, max)`. This preserves
+   the base WorkloadPriorityClass value as the anchor point.
+
+5. **All boost/offset fields bounded to [-1B, +1B].** This prevents int32
+   overflow while allowing practically any reasonable priority adjustment.
+
+6. **Required fields kept minimal:** Only the three duration fields
+   (checkpointFreshnessTarget, startupProtectionWindow, minRuntimeBetweenYields)
+   are required. All boost/offset/clamp fields have safe zero defaults.
+
+7. **RTJ status gets a `priorityShaping` sub-object (not flat fields).**
+   This groups all priority-shaping observability under a single nil-able
+   pointer, preserving Phase 4 status shape when no policy is referenced.
+
+8. **Webhook follows ResumeReadinessPolicy pattern.** Stateless webhook,
+   no Client field, separate Setup function wired in main.go.
+
+### Files Created (Session 2)
+
+- `api/v1alpha1/checkpointprioritypolicy_types.go` — CheckpointPriorityPolicy
+  CRD types, PreemptionState enum, PriorityShapingStatus struct, defaults
+- `api/v1alpha1/checkpointprioritypolicy_webhook.go` — defaulting and
+  validation webhook with bound checks, cross-field validation
+- `api/v1alpha1/checkpointprioritypolicy_webhook_test.go` — 19 tests covering
+  defaults, validation accepts/rejects, update/delete, deep copy
+- `config/crd/bases/training.checkpoint.example.io_checkpointprioritypolicies.yaml`
+  — CRD manifest for CheckpointPriorityPolicy
+- `docs/phase5/api.md` — complete API reference with validation rules,
+  defaulting table, preemption state machine, effective priority formula
+- `docs/phase5/adr/0002-checkpointprioritypolicy-api.md` — 9 decisions
+  covering naming, scope, required fields, optional pairs, fail-open defaults,
+  offset semantics, clamping, status design, and relationship to
+  WorkloadPriorityClass
+
+### Files Modified (Session 2)
+
+- `api/v1alpha1/resumabletrainingjob_types.go` — added `PriorityPolicyReference`
+  struct, `spec.priorityPolicyRef` field, `status.priorityShaping` field,
+  `validatePriorityPolicyRef()` method, `IsPriorityShapingEnabled()` helper
+- `api/v1alpha1/resumabletrainingjob_webhook_test.go` — added 6 Phase 5 tests:
+  backward compat (nil ref), valid ref, empty ref rejection, Phase 4 manifest
+  unchanged, full Phase 5 spec, IsPriorityShapingEnabled table test
+- `api/v1alpha1/resumabletrainingjob_types_test.go` — added Phase 5 backward
+  compat test, PriorityPolicyReference deep copy test, RTJ deep copy test with
+  Phase 5 fields
+- `api/v1alpha1/zz_generated.deepcopy.go` — added DeepCopy for
+  PriorityPolicyReference, PriorityShapingStatus, CheckpointPriorityPolicy*,
+  updated ResumableTrainingJobSpec/Status to include new pointer fields
+- `config/crd/bases/training.checkpoint.example.io_resumabletrainingjobs.yaml`
+  — added `spec.priorityPolicyRef` and `status.priorityShaping` sections
+- `config/rbac/role.yaml` — added checkpointprioritypolicies read/status
+  permissions
+- `cmd/operator/main.go` — wired CheckpointPriorityPolicy webhook
+- `docs/phase5/session-handoff.md` — added Session 2 record
+
+### Tests Run
+
+Unit tests for api/v1alpha1 package (pending verification).
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | Workload.Spec.Priority mutability and GenericJob sync clobbering | Critical — blocks G3 | Open — must inspect Kueue v0.15.1 GenericJob reconciler source |
+| OQ-2 | Kueue preemption responsiveness to Priority changes | Affects latency of preemption after priority drop | Open — review Kueue preemption code path |
+| OQ-3 | Checkpoint manifest timestamp source | Affects I/O pattern | Tentatively resolved: reuse checkpoints.Catalog |
+| OQ-4 | Priority Shaping Controller placement | Affects code organisation | Tentatively resolved: separate controller |
+| OQ-5 | Negative effective priority values | Affects penalty formula | Open — verify Kueue handles negative int32 |
+| OQ-6 | Protection window start time | Affects accuracy | Tentatively resolved: new timestamp at phase transition |
+| OQ-7 | Interaction with ResumeReadiness AdmissionCheck | Affects evaluation scope | Tentatively resolved: independent concerns |
+| OQ-8 | Priority shaping for queued RTJs | Affects re-admission ordering | Tentatively resolved: reset to base when queued |
+
+### Divergence Notes
+
+**Session 2 divergence from Session 1 design:**
+
+- CRD renamed from `PriorityShapingPolicy` to `CheckpointPriorityPolicy`.
+  The original name was a placeholder; the new name is more specific.
+- RTJ field renamed from `spec.priorityShapingRef` to `spec.priorityPolicyRef`.
+- Policy spec fields differ from Session 1's G5 sketch:
+  - `protectionDuration` → `startupProtectionWindow` (more precise name)
+  - `freshnessThreshold` → `checkpointFreshnessTarget` (aligns with domain)
+  - `penaltyStepSize` and `maxPenalty` → replaced by four state-specific
+    adjustments (protectedBoost, cooldownBoost, staleCheckpointBoost,
+    preemptibleOffset) which are more flexible and explicit
+  - `evaluationInterval` → deferred to controller implementation (not a policy
+    field; it's a controller configuration concern)
+  - Added: `minRuntimeBetweenYields`, `maxYieldsPerWindow`, `yieldWindow`,
+    `failOpenOnTelemetryLoss`, `failOpenOnCheckpointStoreErrors`,
+    `minEffectivePriority`, `maxEffectivePriority`
+
+These divergences are intentional refinements that emerged during implementation.
+The Session 1 design sketch was explicitly marked as preliminary.
+
+---
+
+## Recommended Next Prompt (Session 3)
+
+**Session 3: Resolve OQ-1 and OQ-2, then implement the Priority Shaping Controller.**
+
+Steps:
+1. Inspect Kueue v0.15.1 GenericJob reconciler source for Priority field
+   lifecycle (creation vs. sync vs. admission). Resolve OQ-1.
+2. Inspect Kueue v0.15.1 preemption code path for how it responds to
+   Priority changes on running Workloads. Resolve OQ-2.
+3. If OQ-1 requires adapter changes, implement the smallest fix in the
+   RTJGenericJob adapter (skip Priority when shaping is active).
+4. Implement the Priority Shaping Controller as a separate reconciler:
+   - Timer-based evaluation loop
+   - Read CheckpointPriorityPolicy referenced by each RTJ
+   - Compute preemption state and effective priority
+   - Write effective priority to Workload.Spec.Priority
+   - Update RTJ status.priorityShaping
+5. Wire controller into cmd/operator/main.go.
+6. Add unit tests for the controller.
+7. Update docs/phase5/session-handoff.md.

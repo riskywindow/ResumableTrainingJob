@@ -214,6 +214,466 @@ func TestWebhookValidateCreateRejectsPartialAdmissionWithoutAllowWorldSizeChange
 	}
 }
 
+// --- Phase 4 webhook tests: topology ---
+
+func TestWebhookDefaultPreservesPhase3SpecWithoutTopology(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = nil
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	// Phase 3 spec should pass without topology
+	if job.Spec.Topology != nil {
+		t.Fatalf("expected topology to remain nil for Phase 3 backward compat")
+	}
+}
+
+func TestWebhookDefaultSetsTopologyModeWhenEmpty(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{} // mode empty
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	if job.Spec.Topology.Mode != DefaultTopologyMode {
+		t.Fatalf("expected topology mode to default to %q, got %q", DefaultTopologyMode, job.Spec.Topology.Mode)
+	}
+}
+
+func TestWebhookDefaultPreservesExplicitTopologyMode(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	if job.Spec.Topology.Mode != TopologyModeRequired {
+		t.Fatalf("expected topology mode to stay %q, got %q", TopologyModeRequired, job.Spec.Topology.Mode)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsTopologyRequired(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected topology Required spec to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsTopologyPreferred(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModePreferred,
+		TopologyLevel: "kubernetes.io/hostname",
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected topology Preferred spec to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsTopologyUnconstrained(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{
+		Mode: TopologyModeUnconstrained,
+		// TopologyLevel is optional for Unconstrained
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected topology Unconstrained spec to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsTopologyDisabled(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{
+		Mode: TopologyModeDisabled,
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected topology Disabled spec to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsRequiredWithoutTopologyLevel(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{
+		Mode: TopologyModeRequired,
+		// TopologyLevel missing
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject Required mode without topologyLevel")
+	}
+	if !strings.Contains(err.Error(), "topologyLevel") {
+		t.Fatalf("expected error about topologyLevel, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsPreferredWithoutTopologyLevel(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{
+		Mode: TopologyModePreferred,
+		// TopologyLevel missing
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject Preferred mode without topologyLevel")
+	}
+	if !strings.Contains(err.Error(), "topologyLevel") {
+		t.Fatalf("expected error about topologyLevel, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsColocationWithDisabledTopology(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{
+		Mode:                   TopologyModeDisabled,
+		LeaderWorkerColocation: true,
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject leaderWorkerColocation with Disabled mode")
+	}
+	if !strings.Contains(err.Error(), "leaderWorkerColocation") {
+		t.Fatalf("expected error about leaderWorkerColocation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsColocationWithRequiredTopology(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{
+		Mode:                   TopologyModeRequired,
+		TopologyLevel:          "topology.kubernetes.io/zone",
+		LeaderWorkerColocation: true,
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected colocation with Required mode to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsPhase3ManifestUnchanged(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// A Phase 3 manifest with no topology at all should pass unchanged.
+	job := minimalValidRTJ()
+	job.Spec.Topology = nil
+	job.Spec.Parallelism = nil
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected Phase 3 manifest without topology to pass, got %v", err)
+	}
+
+	// Topology must remain nil after defaulting.
+	if job.Spec.Topology != nil {
+		t.Fatalf("expected topology to stay nil for Phase 3 backward compatibility")
+	}
+}
+
+func TestWebhookValidateCreateAcceptsTopologyWithParallelism(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Topology + parallelism (Phase 4 full-feature spec).
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		PodSetName:             "trainer",
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected Phase 4 full spec to pass validation, got %v", err)
+	}
+}
+
+func TestIsTopologyEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		topology *TopologySpec
+		want     bool
+	}{
+		{name: "nil topology", topology: nil, want: false},
+		{name: "disabled", topology: &TopologySpec{Mode: TopologyModeDisabled}, want: false},
+		{name: "required", topology: &TopologySpec{Mode: TopologyModeRequired, TopologyLevel: "zone"}, want: true},
+		{name: "preferred", topology: &TopologySpec{Mode: TopologyModePreferred, TopologyLevel: "zone"}, want: true},
+		{name: "unconstrained", topology: &TopologySpec{Mode: TopologyModeUnconstrained}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := minimalValidRTJ()
+			job.Spec.Topology = tt.topology
+			if got := job.IsTopologyEnabled(); got != tt.want {
+				t.Fatalf("IsTopologyEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Phase 5 webhook tests: priority policy ref ---
+
+func TestWebhookDefaultPreservesPhase4SpecWithoutPriorityPolicyRef(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.PriorityPolicyRef = nil
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	// Phase 4 spec should pass without priority policy ref.
+	if job.Spec.PriorityPolicyRef != nil {
+		t.Fatalf("expected priorityPolicyRef to remain nil for Phase 4 backward compat")
+	}
+}
+
+func TestWebhookValidateCreateAcceptsPriorityPolicyRef(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{
+		Name: "default-shaping",
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected spec with priorityPolicyRef to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsEmptyPriorityPolicyRefName(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{
+		Name: "",
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject empty priorityPolicyRef name")
+	}
+	if !strings.Contains(err.Error(), "priorityPolicyRef") {
+		t.Fatalf("expected error about priorityPolicyRef, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsPhase4ManifestUnchanged(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// A Phase 4 manifest with topology but no priority policy ref should pass.
+	job := minimalValidRTJ()
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.PriorityPolicyRef = nil
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected Phase 4 manifest without priorityPolicyRef to pass, got %v", err)
+	}
+
+	// PriorityPolicyRef must remain nil.
+	if job.Spec.PriorityPolicyRef != nil {
+		t.Fatalf("expected priorityPolicyRef to stay nil for Phase 4 backward compatibility")
+	}
+}
+
+func TestWebhookValidateCreateAcceptsPriorityPolicyRefWithTopologyAndParallelism(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Full Phase 5 spec with all optional features enabled.
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		PodSetName:             "trainer",
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{
+		Name: "aggressive-shaping",
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected full Phase 5 spec to pass validation, got %v", err)
+	}
+}
+
+func TestIsPriorityShapingEnabled(t *testing.T) {
+	tests := []struct {
+		name      string
+		policyRef *PriorityPolicyReference
+		want      bool
+	}{
+		{name: "nil ref", policyRef: nil, want: false},
+		{name: "empty name", policyRef: &PriorityPolicyReference{Name: ""}, want: false},
+		{name: "whitespace name", policyRef: &PriorityPolicyReference{Name: "  "}, want: false},
+		{name: "valid ref", policyRef: &PriorityPolicyReference{Name: "default-shaping"}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := minimalValidRTJ()
+			job.Spec.PriorityPolicyRef = tt.policyRef
+			if got := job.IsPriorityShapingEnabled(); got != tt.want {
+				t.Fatalf("IsPriorityShapingEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func webhookTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()

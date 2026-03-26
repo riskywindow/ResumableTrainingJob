@@ -16,6 +16,7 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
 	"github.com/example/checkpoint-native-preemption-controller/internal/checkpoints"
@@ -830,6 +831,531 @@ func newTestChildJobSet(name, namespace string) *unstructured.Unstructured {
 	childJobSet.SetName(name)
 	childJobSet.SetNamespace(namespace)
 	return childJobSet
+}
+
+// --- Phase 4 Tests ---
+
+func TestReconcileDoesNotCreateChildJobSetBeforeReadinessGatePasses(t *testing.T) {
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	rtj := controllerTestRTJWithTopology()
+	rtj.Spec.Suspend = ptr.To(false)
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.Phase = trainingv1alpha1.PhaseQueued
+	rtj.Status.ObservedGeneration = rtj.Generation
+
+	// Create a workload with a Pending admission check.
+	workload := testWorkloadForRTJ(rtj, kueuev1beta2.CheckStatePending)
+	rtj.Status.WorkloadReference = &trainingv1alpha1.WorkloadReference{
+		Name:      workload.Name,
+		Namespace: workload.Namespace,
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj, workload).
+		WithObjects(rtj, workload).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{Client: client, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile %d failed: %v", i+1, err)
+		}
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, client.Get(ctx, req.NamespacedName, &updated))
+
+	// Should NOT have created a child JobSet.
+	if updated.Status.ActiveJobSetName != "" {
+		t.Fatalf("expected no active child JobSet while readiness gate is pending, got %q", updated.Status.ActiveJobSetName)
+	}
+
+	// Should have set launch readiness to pending.
+	if updated.Status.LaunchReadiness == nil {
+		t.Fatal("expected LaunchReadiness to be set")
+	}
+	if updated.Status.LaunchReadiness.Ready {
+		t.Fatal("expected LaunchReadiness.Ready to be false")
+	}
+	if updated.Status.LaunchReadiness.GateState != trainingv1alpha1.ReadinessGatePending {
+		t.Fatalf("expected gate state Pending, got %q", updated.Status.LaunchReadiness.GateState)
+	}
+}
+
+func TestReconcileDoesNotCreateChildJobSetBeforeTopologyAssignment(t *testing.T) {
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	rtj := controllerTestRTJWithTopology()
+	rtj.Spec.Suspend = ptr.To(false)
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.Phase = trainingv1alpha1.PhaseQueued
+	rtj.Status.ObservedGeneration = rtj.Generation
+
+	// Create a workload that is admitted but has NO topology assignment.
+	workload := testWorkloadForRTJ(rtj, kueuev1beta2.CheckStateReady)
+	workload.Status.Admission = &kueuev1beta2.Admission{
+		ClusterQueue: "test-queue",
+		PodSetAssignments: []kueuev1beta2.PodSetAssignment{
+			{
+				Name:  "trainer",
+				Count: ptr.To[int32](2),
+				// No TopologyAssignment — this is the key point.
+			},
+		},
+	}
+	rtj.Status.WorkloadReference = &trainingv1alpha1.WorkloadReference{
+		Name:      workload.Name,
+		Namespace: workload.Namespace,
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj, workload).
+		WithObjects(rtj, workload).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{Client: client, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile %d failed: %v", i+1, err)
+		}
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, client.Get(ctx, req.NamespacedName, &updated))
+
+	// Should NOT have created a child JobSet.
+	if updated.Status.ActiveJobSetName != "" {
+		t.Fatalf("expected no active child JobSet while topology assignment is missing, got %q", updated.Status.ActiveJobSetName)
+	}
+	if updated.Status.LaunchReadiness == nil {
+		t.Fatal("expected LaunchReadiness to be set")
+	}
+	if updated.Status.LaunchReadiness.Reason != reasonWaitingForTopology {
+		t.Fatalf("expected reason %q, got %q", reasonWaitingForTopology, updated.Status.LaunchReadiness.Reason)
+	}
+}
+
+func TestReconcileTopologyAdmittedLaunchCreatesChildWithNodeSelector(t *testing.T) {
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	rtj := controllerTestRTJWithTopology()
+	rtj.Spec.Suspend = ptr.To(false)
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.Phase = trainingv1alpha1.PhaseQueued
+	rtj.Status.ObservedGeneration = rtj.Generation
+
+	// Create a workload with topology assignment.
+	workload := testWorkloadForRTJ(rtj, kueuev1beta2.CheckStateReady)
+	workload.Status.Admission = &kueuev1beta2.Admission{
+		ClusterQueue: "test-queue",
+		PodSetAssignments: []kueuev1beta2.PodSetAssignment{
+			{
+				Name:  "trainer",
+				Count: ptr.To[int32](2),
+				TopologyAssignment: &kueuev1beta2.TopologyAssignment{
+					Levels: []string{"topology.kubernetes.io/zone"},
+					Slices: []kueuev1beta2.TopologyAssignmentSlice{
+						{
+							DomainCount: 1,
+							ValuesPerLevel: []kueuev1beta2.TopologyAssignmentSliceLevelValues{
+								{Universal: ptr.To("us-east-1a")},
+							},
+							PodCounts: kueuev1beta2.TopologyAssignmentSlicePodCounts{
+								Universal: ptr.To[int32](2),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	rtj.Status.WorkloadReference = &trainingv1alpha1.WorkloadReference{
+		Name:      workload.Name,
+		Namespace: workload.Namespace,
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj, workload).
+		WithObjects(rtj, workload).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{Client: client, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	// First reconcile: evaluates gates and launches.
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("launch reconcile failed: %v", err)
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, client.Get(ctx, req.NamespacedName, &updated))
+
+	if updated.Status.Phase != trainingv1alpha1.PhaseStarting {
+		t.Fatalf("expected phase %q, got %q", trainingv1alpha1.PhaseStarting, updated.Status.Phase)
+	}
+	if updated.Status.ActiveJobSetName == "" {
+		t.Fatal("expected active child JobSet to be created")
+	}
+
+	// Verify topology status was populated.
+	if updated.Status.Topology == nil {
+		t.Fatal("expected Topology status to be populated")
+	}
+	if len(updated.Status.Topology.Levels) != 1 {
+		t.Fatalf("expected 1 topology level, got %d", len(updated.Status.Topology.Levels))
+	}
+	if updated.Status.Topology.Levels[0] != "topology.kubernetes.io/zone" {
+		t.Fatalf("expected zone level, got %s", updated.Status.Topology.Levels[0])
+	}
+
+	// Verify the child JobSet has topology nodeSelector.
+	childJobSet := rtjjobset.NewEmptyChildJobSet(trainingv1alpha1.DefaultJobSetAPIVersion, trainingv1alpha1.DefaultJobSetKind)
+	must(t, client.Get(ctx, types.NamespacedName{Name: updated.Status.ActiveJobSetName, Namespace: rtj.Namespace}, childJobSet))
+	decoded, err := rtjjobset.FromUnstructured(childJobSet)
+	if err != nil {
+		t.Fatalf("decode child JobSet: %v", err)
+	}
+	pod := decoded.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec
+	if pod.NodeSelector == nil {
+		t.Fatal("expected nodeSelector on child JobSet pod template")
+	}
+	if pod.NodeSelector["topology.kubernetes.io/zone"] != "us-east-1a" {
+		t.Fatalf("expected topology zone in nodeSelector, got %v", pod.NodeSelector)
+	}
+
+	// Verify launch readiness is Ready.
+	if updated.Status.LaunchReadiness == nil {
+		t.Fatal("expected LaunchReadiness to be populated")
+	}
+	if !updated.Status.LaunchReadiness.Ready {
+		t.Fatal("expected LaunchReadiness.Ready to be true")
+	}
+
+	// Verify effective launch shape.
+	if updated.Status.EffectiveLaunchShape == nil {
+		t.Fatal("expected EffectiveLaunchShape to be populated")
+	}
+	if updated.Status.EffectiveLaunchShape.WorkerCount != 2 {
+		t.Fatalf("expected worker count 2, got %d", updated.Status.EffectiveLaunchShape.WorkerCount)
+	}
+}
+
+func TestReconcileFlavorInjectionStillWorksWithTopology(t *testing.T) {
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	rtj := controllerTestRTJWithTopology()
+	rtj.Spec.Suspend = ptr.To(false)
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.Phase = trainingv1alpha1.PhaseQueued
+	rtj.Status.ObservedGeneration = rtj.Generation
+
+	workload := testWorkloadForRTJ(rtj, kueuev1beta2.CheckStateReady)
+	workload.Status.Admission = &kueuev1beta2.Admission{
+		ClusterQueue: "test-queue",
+		PodSetAssignments: []kueuev1beta2.PodSetAssignment{
+			{
+				Name:  "trainer",
+				Count: ptr.To[int32](2),
+				Flavors: map[corev1.ResourceName]kueuev1beta2.ResourceFlavorReference{
+					"nvidia.com/gpu": "a100-80gb",
+				},
+				TopologyAssignment: &kueuev1beta2.TopologyAssignment{
+					Levels: []string{"topology.kubernetes.io/zone"},
+					Slices: []kueuev1beta2.TopologyAssignmentSlice{
+						{
+							DomainCount: 1,
+							ValuesPerLevel: []kueuev1beta2.TopologyAssignmentSliceLevelValues{
+								{Universal: ptr.To("us-east-1a")},
+							},
+							PodCounts: kueuev1beta2.TopologyAssignmentSlicePodCounts{
+								Universal: ptr.To[int32](2),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	rtj.Status.WorkloadReference = &trainingv1alpha1.WorkloadReference{
+		Name:      workload.Name,
+		Namespace: workload.Namespace,
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj, workload).
+		WithObjects(rtj, workload).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{Client: client, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile %d failed: %v", i+1, err)
+		}
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, client.Get(ctx, req.NamespacedName, &updated))
+
+	// Verify flavor was recorded in admission status.
+	if updated.Status.Admission == nil {
+		t.Fatal("expected admission status to be populated")
+	}
+	if updated.Status.Admission.AdmittedFlavors == nil {
+		t.Fatal("expected admitted flavors to be populated")
+	}
+	if updated.Status.Admission.AdmittedFlavors["trainer"] != "a100-80gb" {
+		t.Fatalf("expected flavor a100-80gb for trainer, got %v", updated.Status.Admission.AdmittedFlavors)
+	}
+}
+
+func TestReconcileNonRepresentableTopologyFailsClearly(t *testing.T) {
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	rtj := controllerTestRTJWithTopology()
+	rtj.Spec.Suspend = ptr.To(false)
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.Phase = trainingv1alpha1.PhaseQueued
+	rtj.Status.ObservedGeneration = rtj.Generation
+
+	// Create a workload with multi-domain single-level topology (not representable).
+	workload := testWorkloadForRTJ(rtj, kueuev1beta2.CheckStateReady)
+	workload.Status.Admission = &kueuev1beta2.Admission{
+		ClusterQueue: "test-queue",
+		PodSetAssignments: []kueuev1beta2.PodSetAssignment{
+			{
+				Name:  "trainer",
+				Count: ptr.To[int32](4),
+				TopologyAssignment: &kueuev1beta2.TopologyAssignment{
+					Levels: []string{"topology.kubernetes.io/zone"},
+					Slices: []kueuev1beta2.TopologyAssignmentSlice{
+						{
+							DomainCount: 2,
+							ValuesPerLevel: []kueuev1beta2.TopologyAssignmentSliceLevelValues{
+								{Individual: &kueuev1beta2.TopologyAssignmentSliceLevelIndividualValues{
+									Roots: []string{"us-east-1a", "us-east-1b"},
+								}},
+							},
+							PodCounts: kueuev1beta2.TopologyAssignmentSlicePodCounts{
+								Universal: ptr.To[int32](2),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	rtj.Status.WorkloadReference = &trainingv1alpha1.WorkloadReference{
+		Name:      workload.Name,
+		Namespace: workload.Namespace,
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj, workload).
+		WithObjects(rtj, workload).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{Client: client, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	// The reconcile should fail and mark the RTJ as failed.
+	for i := 0; i < 3; i++ {
+		_, _ = reconciler.Reconcile(ctx, req)
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, client.Get(ctx, req.NamespacedName, &updated))
+
+	if updated.Status.Phase != trainingv1alpha1.PhaseFailed {
+		t.Fatalf("expected phase Failed for non-representable topology, got %q", updated.Status.Phase)
+	}
+}
+
+func TestReconcilePhase3BehaviorPreservedWithoutTopology(t *testing.T) {
+	// When topology is not enabled and no workload reference exists,
+	// launch should proceed as in Phase 3 without any gate checks.
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+
+	rtj := controllerTestRTJ()
+	rtj.Spec.Suspend = ptr.To(false)
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.Phase = trainingv1alpha1.PhaseQueued
+	rtj.Status.ObservedGeneration = rtj.Generation
+	// No WorkloadReference, no topology — pure Phase 3 path.
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj).
+		WithObjects(rtj).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{Client: client, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	// Single reconcile: should launch immediately without gate checks.
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("launch reconcile failed: %v", err)
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, client.Get(ctx, req.NamespacedName, &updated))
+
+	if updated.Status.Phase != trainingv1alpha1.PhaseStarting {
+		t.Fatalf("expected phase %q for Phase 3 path, got %q", trainingv1alpha1.PhaseStarting, updated.Status.Phase)
+	}
+	if updated.Status.LaunchReadiness != nil {
+		t.Fatal("expected LaunchReadiness to be nil in Phase 3 path")
+	}
+	if updated.Status.Topology != nil {
+		t.Fatal("expected Topology to be nil in Phase 3 path")
+	}
+}
+
+func TestReconcileChildJobSetHasNoKueueManagementLabels(t *testing.T) {
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	rtj := controllerTestRTJWithTopology()
+	rtj.Spec.Suspend = ptr.To(false)
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.Phase = trainingv1alpha1.PhaseQueued
+	rtj.Status.ObservedGeneration = rtj.Generation
+
+	workload := testWorkloadForRTJ(rtj, kueuev1beta2.CheckStateReady)
+	workload.Status.Admission = &kueuev1beta2.Admission{
+		ClusterQueue: "test-queue",
+		PodSetAssignments: []kueuev1beta2.PodSetAssignment{
+			{
+				Name:  "trainer",
+				Count: ptr.To[int32](2),
+				TopologyAssignment: &kueuev1beta2.TopologyAssignment{
+					Levels: []string{"topology.kubernetes.io/zone"},
+					Slices: []kueuev1beta2.TopologyAssignmentSlice{
+						{
+							DomainCount: 1,
+							ValuesPerLevel: []kueuev1beta2.TopologyAssignmentSliceLevelValues{
+								{Universal: ptr.To("us-east-1a")},
+							},
+							PodCounts: kueuev1beta2.TopologyAssignmentSlicePodCounts{
+								Universal: ptr.To[int32](2),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	rtj.Status.WorkloadReference = &trainingv1alpha1.WorkloadReference{
+		Name:      workload.Name,
+		Namespace: workload.Namespace,
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj, workload).
+		WithObjects(rtj, workload).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{Client: client, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile %d failed: %v", i+1, err)
+		}
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, client.Get(ctx, req.NamespacedName, &updated))
+
+	childJobSet := rtjjobset.NewEmptyChildJobSet(trainingv1alpha1.DefaultJobSetAPIVersion, trainingv1alpha1.DefaultJobSetKind)
+	must(t, client.Get(ctx, types.NamespacedName{Name: updated.Status.ActiveJobSetName, Namespace: rtj.Namespace}, childJobSet))
+
+	labels := childJobSet.GetLabels()
+	for key := range labels {
+		if key == "kueue.x-k8s.io/queue-name" ||
+			key == "kueue.x-k8s.io/priority-class" ||
+			key == "kueue.x-k8s.io/managed" {
+			t.Fatalf("found Kueue management label %q on child JobSet, expected none", key)
+		}
+	}
+}
+
+// --- Phase 4 Test Helpers ---
+
+func controllerTestRTJWithTopology() *trainingv1alpha1.ResumableTrainingJob {
+	rtj := controllerTestRTJ()
+	rtj.Spec.Topology = &trainingv1alpha1.TopologySpec{
+		Mode:          trainingv1alpha1.TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	return rtj
+}
+
+func testWorkloadForRTJ(rtj *trainingv1alpha1.ResumableTrainingJob, checkState kueuev1beta2.CheckState) *kueuev1beta2.Workload {
+	wl := &kueuev1beta2.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      rtj.Name + "-workload",
+			Namespace: rtj.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: trainingv1alpha1.GroupVersion.String(),
+					Kind:       "ResumableTrainingJob",
+					Name:       rtj.Name,
+					UID:        rtj.UID,
+				},
+			},
+		},
+		Status: kueuev1beta2.WorkloadStatus{},
+	}
+
+	// Add a resume-readiness admission check state.
+	wl.Status.AdmissionChecks = []kueuev1beta2.AdmissionCheckState{
+		{
+			Name:    "resume-readiness",
+			State:   checkState,
+			Message: "InitialLaunchReady",
+		},
+	}
+
+	return wl
 }
 
 type fakeCheckpointCatalog struct {

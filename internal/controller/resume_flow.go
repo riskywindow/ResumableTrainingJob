@@ -241,3 +241,178 @@ func admittedWorldSize(job *trainingv1alpha1.ResumableTrainingJob) int32 {
 	}
 	return job.Spec.Identity.WorldSize
 }
+
+// resolveWorkerPodSetNameForJob returns the worker PodSet name for the RTJ.
+// Defaults to the first replicatedJob name when not explicitly configured.
+func resolveWorkerPodSetNameForJob(job *trainingv1alpha1.ResumableTrainingJob) string {
+	name := job.EffectivePodSetName()
+	if name == "" {
+		spec, err := rtjjobset.ParseTemplate(job.Spec.Runtime.Template.Spec)
+		if err == nil && len(spec.ReplicatedJobs) > 0 {
+			name = spec.ReplicatedJobs[0].Name
+		}
+	}
+	return name
+}
+
+// reconcileLaunchWithGate is the Phase 4 variant of reconcileLaunch that uses
+// the gate result to build a launch plan with topology and admission info.
+func (r *ResumableTrainingJobReconciler) reconcileLaunchWithGate(
+	ctx context.Context,
+	job *trainingv1alpha1.ResumableTrainingJob,
+	now metav1.Time,
+	gateResult *LaunchGateResult,
+) (ctrl.Result, error) {
+	runAttempt := job.Status.CurrentRunAttempt + 1
+	if runAttempt < 1 {
+		runAttempt = 1
+	}
+
+	plan := buildLaunchPlan(job, gateResult)
+	controlConfigMapName, childJobSetName, err := r.createRunAttemptResourcesWithPlan(
+		ctx, job, runAttempt,
+		checkpoints.ResumeManifestURI(job.Status.SelectedCheckpoint),
+		plan,
+	)
+	if err != nil {
+		return r.failLaunch(ctx, job, err.Error())
+	}
+
+	changed := markStarting(job, runAttempt, controlConfigMapName, childJobSetName, now)
+
+	// Sync Phase 3/4 status fields.
+	if plan.AdmittedCounts != nil {
+		changed = syncAdmissionStatus(job, plan.WorkerCount, job.EffectivePreferredCount(), plan.AdmittedFlavors) || changed
+		if r.Metrics != nil {
+			r.Metrics.ObserveAdmissionComparison(plan.WorkerCount, job.EffectivePreferredCount())
+		}
+	}
+	changed = syncEffectiveLaunchShape(job, plan.buildEffectiveLaunchShape(nil)) || changed
+
+	if changed {
+		if err := r.Status().Update(ctx, job); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{Requeue: true}, nil
+}
+
+// reconcileResumeWithGate is the Phase 4 variant of reconcileResume that uses
+// the gate result to build a launch plan with topology and admission info.
+func (r *ResumableTrainingJobReconciler) reconcileResumeWithGate(
+	ctx context.Context,
+	job *trainingv1alpha1.ResumableTrainingJob,
+	now metav1.Time,
+	gateResult *LaunchGateResult,
+) (ctrl.Result, error) {
+	selectedCheckpoint, selected, err := r.resumeCheckpointForAttempt(ctx, job)
+	if err != nil {
+		if r.Metrics != nil {
+			r.Metrics.IncResumeFailed()
+		}
+		return r.failLaunch(ctx, job, fmt.Sprintf("select resume checkpoint: %v", err))
+	}
+	if !selected || selectedCheckpoint == nil {
+		if r.Metrics != nil {
+			r.Metrics.IncResumeFailed()
+		}
+		message := "No compatible complete checkpoint was available for resume."
+		changed := setCondition(job, conditionTypeDegraded, metav1.ConditionTrue, reasonNoCompatibleCheckpoint, message, now)
+		changed = markFailed(job, reasonNoCompatibleCheckpoint, message, now) || changed
+		if changed {
+			if err := r.Status().Update(ctx, job); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	runAttempt := job.Status.CurrentRunAttempt + 1
+	if job.Status.Phase == trainingv1alpha1.PhaseRestoring && job.Status.ActiveJobSetName != "" {
+		runAttempt = job.Status.CurrentRunAttempt
+	}
+	if runAttempt < 1 {
+		runAttempt = 1
+	}
+	if r.Metrics != nil && job.Status.Phase != trainingv1alpha1.PhaseRestoring {
+		r.Metrics.IncResumeAttempted()
+		r.Metrics.IncPhase4ResumeAttempted()
+	}
+
+	plan := buildLaunchPlan(job, gateResult)
+	controlConfigMapName, childJobSetName, err := r.createRunAttemptResourcesWithPlan(
+		ctx, job, runAttempt,
+		selectedCheckpoint.ManifestURI,
+		plan,
+	)
+	if err != nil {
+		if r.Metrics != nil {
+			r.Metrics.IncResumeFailed()
+		}
+		return r.failLaunch(ctx, job, err.Error())
+	}
+
+	changed := markRestoring(job, runAttempt, controlConfigMapName, childJobSetName, selectedCheckpoint, now)
+
+	// Phase 3/4: sync status fields.
+	if selectedCheckpoint.WorldSize > 0 {
+		restoreWorldSize := plan.WorldSize
+		changed = syncRestoreStatus(job, selectedCheckpoint.WorldSize, restoreWorldSize) || changed
+		if r.Metrics != nil {
+			r.Metrics.ObserveResumeWorldSize(selectedCheckpoint.WorldSize, restoreWorldSize)
+		}
+	}
+	if plan.AdmittedCounts != nil {
+		changed = syncAdmissionStatus(job, plan.WorkerCount, job.EffectivePreferredCount(), plan.AdmittedFlavors) || changed
+		if r.Metrics != nil {
+			r.Metrics.ObserveAdmissionComparison(plan.WorkerCount, job.EffectivePreferredCount())
+		}
+	}
+	changed = syncEffectiveLaunchShape(job, plan.buildEffectiveLaunchShape(selectedCheckpoint)) || changed
+
+	if changed {
+		if err := r.Status().Update(ctx, job); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{Requeue: true}, nil
+}
+
+// createRunAttemptResourcesWithPlan creates the control ConfigMap and child
+// JobSet using a LaunchPlan for topology-aware rendering.
+func (r *ResumableTrainingJobReconciler) createRunAttemptResourcesWithPlan(
+	ctx context.Context,
+	job *trainingv1alpha1.ResumableTrainingJob,
+	runAttempt int32,
+	resumeManifestURI string,
+	plan *LaunchPlan,
+) (string, string, error) {
+	controlConfigMapName := rtjjobset.ControlConfigMapName(job.Name, runAttempt)
+	childJobSetName := rtjjobset.ChildJobSetName(job.Name, runAttempt)
+
+	controlConfigMap := buildControlConfigMap(job, controlConfigMapName, runAttempt)
+	if err := controllerutil.SetControllerReference(job, controlConfigMap, r.Scheme); err != nil {
+		return "", "", fmt.Errorf("set control ConfigMap owner reference: %w", err)
+	}
+	if _, err := createIfMissing(ctx, r.Client, controlConfigMap); err != nil {
+		return "", "", fmt.Errorf("create control ConfigMap: %w", err)
+	}
+
+	renderInput := plan.toRenderInput(job, runAttempt, childJobSetName, controlConfigMapName, resumeManifestURI)
+	renderedJobSet, err := rtjjobset.RenderChildJobSetUnstructured(renderInput)
+	if err != nil {
+		return "", "", fmt.Errorf("render child JobSet: %w", err)
+	}
+	if err := controllerutil.SetOwnerReference(job, renderedJobSet, r.Scheme); err != nil {
+		return "", "", fmt.Errorf("set child JobSet owner reference: %w", err)
+	}
+	created, err := createIfMissing(ctx, r.Client, renderedJobSet)
+	if err != nil {
+		return "", "", fmt.Errorf("create child JobSet: %w", err)
+	}
+	if !created && r.Metrics != nil {
+		r.Metrics.IncDuplicateChildJobSetPrevention()
+	}
+
+	return controlConfigMapName, childJobSetName, nil
+}

@@ -3,6 +3,7 @@ package checkpoints
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 type ResumeRequest struct {
@@ -74,6 +75,24 @@ func CheckManifestCompatibility(manifest CheckpointManifest, request ResumeReque
 		return true, "exact match on lineage, mode, cluster, shape, image, code version, world size, optimizer mode, sharding mode, and manifest format"
 	}
 	return true, fmt.Sprintf("compatible with world-size change (%d -> %d); all other dimensions match", manifest.WorldSize, request.WorldSize)
+}
+
+// IsCheckpointTooOld returns true if the checkpoint's completion time is
+// older than maxAge relative to now. Returns false if maxAge is zero (no limit)
+// or if the checkpoint has no parseable completion time.
+func IsCheckpointTooOld(manifest CheckpointManifest, maxAge time.Duration, now time.Time) (bool, string) {
+	if maxAge <= 0 {
+		return false, ""
+	}
+	completionTime, err := manifest.CompletionTime()
+	if err != nil {
+		return false, fmt.Sprintf("cannot parse checkpoint completion time: %v", err)
+	}
+	age := now.Sub(completionTime)
+	if age > maxAge {
+		return true, fmt.Sprintf("checkpoint age %s exceeds maxCheckpointAge %s", age.Round(time.Second), maxAge)
+	}
+	return false, ""
 }
 
 func isSupportedFormatVersion(version string, supported []string) bool {

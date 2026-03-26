@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 
 # Labels and taints kind worker nodes to simulate heterogeneous resource pools
-# for Phase 3 flavor-aware testing.
+# and topology domains for Phase 3/4 testing.
 #
-# Pool layout:
+# Pool layout (Phase 3):
 #   worker, worker2  → on-demand pool (no taint)
 #   worker3, worker4 → spot pool (tainted with NoSchedule)
 #
+# Topology layout (Phase 4):
+#   worker, worker2  → block-a / rack-1
+#   worker3, worker4 → block-b / rack-2
+#
 # The ResourceFlavors in deploy/dev/flavors/ reference these labels.
+# The Topology in deploy/dev/topology/ references the topology labels.
 
 set -euo pipefail
 
@@ -63,5 +68,43 @@ for i in 2 3; do
     checkpoint-native.dev/spot=true:NoSchedule 2>/dev/null || true
 done
 
+# ── Phase 4: Topology labels ──────────────────────────────────────────
+#
+# Two-level topology hierarchy for Kueue TAS:
+#   Level 0: block (topology.example.io/block)
+#   Level 1: rack  (topology.example.io/rack)
+#
+# These labels are additive and harmless for Phase 3 (which ignores them).
+
+echo
+echo "applying Phase 4 topology labels"
+
+# Block A / Rack 1 → first two workers
+for i in 0 1; do
+  node="${WORKERS[$i]}"
+  echo "  ${node} → block-a / rack-1"
+  kubectl label node "$node" \
+    topology.example.io/block=block-a \
+    topology.example.io/rack=rack-1 \
+    checkpoint-native.dev/phase4=true \
+    --overwrite
+done
+
+# Block B / Rack 2 → last two workers
+for i in 2 3; do
+  node="${WORKERS[$i]}"
+  echo "  ${node} → block-b / rack-2"
+  kubectl label node "$node" \
+    topology.example.io/block=block-b \
+    topology.example.io/rack=rack-2 \
+    checkpoint-native.dev/phase4=true \
+    --overwrite
+done
+
+echo
 echo "node labels and taints applied"
-kubectl get nodes -L checkpoint-native.dev/pool -L checkpoint-native.dev/phase3
+kubectl get nodes \
+  -L checkpoint-native.dev/pool \
+  -L checkpoint-native.dev/phase3 \
+  -L topology.example.io/block \
+  -L topology.example.io/rack

@@ -94,6 +94,56 @@ rules:
       - get
       - list
       - watch
+  # Phase 4: ResumeReadiness AdmissionCheck controller
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - admissionchecks
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - admissionchecks/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - resumereadinesspolicies
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - resumereadinesspolicies/status
+    verbs:
+      - get
+      - update
+      - patch
+  # Phase 5: CheckpointPriorityPolicy
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - checkpointprioritypolicies
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - checkpointprioritypolicies/status
+    verbs:
+      - get
+      - update
+      - patch
   - apiGroups:
       - ""
     resources:

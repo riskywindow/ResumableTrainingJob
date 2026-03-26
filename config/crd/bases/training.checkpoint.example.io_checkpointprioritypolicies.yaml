@@ -1,0 +1,185 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: checkpointprioritypolicies.training.checkpoint.example.io
+spec:
+  group: training.checkpoint.example.io
+  names:
+    kind: CheckpointPriorityPolicy
+    listKind: CheckpointPriorityPolicyList
+    plural: checkpointprioritypolicies
+    shortNames:
+      - cpp
+    singular: checkpointprioritypolicy
+  scope: Cluster
+  versions:
+    - additionalPrinterColumns:
+        - jsonPath: .spec.checkpointFreshnessTarget
+          name: FreshnessTarget
+          type: string
+        - jsonPath: .spec.startupProtectionWindow
+          name: ProtectionWindow
+          type: string
+        - jsonPath: .spec.failOpenOnTelemetryLoss
+          name: FailOpenTelemetry
+          type: boolean
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: |-
+            CheckpointPriorityPolicy is a cluster-scoped configuration object for
+            checkpoint-aware priority shaping. It is referenced by ResumableTrainingJob
+            resources via spec.priorityPolicyRef to enable dynamic effective priority
+            derivation based on checkpoint freshness and yield budgets.
+          properties:
+            apiVersion:
+              description: APIVersion defines the versioned schema of this representation of an object.
+              type: string
+            kind:
+              description: Kind is a string value representing the REST resource this object represents.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: CheckpointPriorityPolicySpec defines the configuration for checkpoint-aware priority shaping.
+              properties:
+                checkpointFreshnessTarget:
+                  description: |-
+                    CheckpointFreshnessTarget is the maximum acceptable age for the latest
+                    completed checkpoint. When the checkpoint is older than this duration,
+                    the job transitions from Active to Preemptible state. Required.
+                  type: string
+                startupProtectionWindow:
+                  description: |-
+                    StartupProtectionWindow is the duration after a job starts or resumes
+                    during which it is shielded from checkpoint-staleness-driven priority
+                    reduction. The protection window resets on every resume. Required.
+                  type: string
+                minRuntimeBetweenYields:
+                  description: |-
+                    MinRuntimeBetweenYields is the minimum duration a job must run between
+                    successive yields. Required.
+                  type: string
+                maxYieldsPerWindow:
+                  description: |-
+                    MaxYieldsPerWindow limits the number of times a job can be preempted
+                    within the yieldWindow duration. When zero, yield counting is disabled.
+                  format: int32
+                  type: integer
+                yieldWindow:
+                  description: |-
+                    YieldWindow is the sliding time window over which yields are counted.
+                    Required when maxYieldsPerWindow > 0.
+                  type: string
+                failOpenOnTelemetryLoss:
+                  description: |-
+                    FailOpenOnTelemetryLoss controls behavior when checkpoint telemetry is
+                    temporarily unavailable. Default: true.
+                  type: boolean
+                failOpenOnCheckpointStoreErrors:
+                  description: |-
+                    FailOpenOnCheckpointStoreErrors controls behavior when the checkpoint
+                    store is temporarily unreachable. Default: false.
+                  type: boolean
+                protectedBoost:
+                  description: |-
+                    ProtectedBoost is the priority offset added to base priority while the
+                    job is in Protected state. Default: 0.
+                  format: int32
+                  type: integer
+                cooldownBoost:
+                  description: |-
+                    CooldownBoost is the priority offset added to base priority while the
+                    job is in Cooldown state. Default: 0.
+                  format: int32
+                  type: integer
+                staleCheckpointBoost:
+                  description: |-
+                    StaleCheckpointBoost is the priority offset applied when the job's latest
+                    checkpoint exceeds the checkpointFreshnessTarget. Default: 0.
+                  format: int32
+                  type: integer
+                preemptibleOffset:
+                  description: |-
+                    PreemptibleOffset is the priority offset applied when the job is in
+                    Preemptible state. Negative values are allowed. Default: 0.
+                  format: int32
+                  type: integer
+                minEffectivePriority:
+                  description: |-
+                    MinEffectivePriority is the floor for the computed effective priority.
+                    Must be <= maxEffectivePriority when both are set.
+                  format: int32
+                  type: integer
+                maxEffectivePriority:
+                  description: |-
+                    MaxEffectivePriority is the ceiling for the computed effective priority.
+                    Must be >= minEffectivePriority when both are set.
+                  format: int32
+                  type: integer
+              required:
+                - checkpointFreshnessTarget
+                - startupProtectionWindow
+                - minRuntimeBetweenYields
+              type: object
+            status:
+              description: CheckpointPriorityPolicyStatus defines the observed state of CheckpointPriorityPolicy.
+              properties:
+                conditions:
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    properties:
+                      lastTransitionTime:
+                        description: lastTransitionTime is the last time the condition transitioned from one status to another.
+                        format: date-time
+                        type: string
+                      message:
+                        description: message is a human readable message indicating details about the transition.
+                        maxLength: 32768
+                        type: string
+                      observedGeneration:
+                        description: observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      reason:
+                        description: reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                        type: string
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                        type: string
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                        type: string
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - type
+                  x-kubernetes-list-type: map
+              type: object
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}

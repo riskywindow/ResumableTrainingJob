@@ -164,6 +164,73 @@ spec:
                       type: integer
                       format: int32
                       minimum: 1
+                    allowWorldSizeChange:
+                      description: >-
+                        Permits resuming from a checkpoint saved at a different
+                        world size. Requires PyTorch DCP resharding.
+                      type: boolean
+                # Phase 3: parallelism
+                parallelism:
+                  description: >-
+                    Configures scalable worker group and partial admission.
+                    When absent, worker count derives from identity.worldSize.
+                  type: object
+                  properties:
+                    preferredCount:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                    minCount:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                    podSetName:
+                      type: string
+                    enablePartialAdmission:
+                      type: boolean
+                # Phase 4: topology
+                topology:
+                  description: >-
+                    Declares topology placement requirements. When absent or
+                    mode is Disabled, topology-aware scheduling is off
+                    (Phase 3 behavior preserved).
+                  type: object
+                  required:
+                    - mode
+                  properties:
+                    mode:
+                      description: >-
+                        Topology placement mode for the worker pod set.
+                      type: string
+                      enum:
+                        - Disabled
+                        - Required
+                        - Preferred
+                        - Unconstrained
+                    topologyLevel:
+                      description: >-
+                        Node label key used as the topology domain.
+                        Required when mode is Required or Preferred.
+                      type: string
+                    leaderWorkerColocation:
+                      description: >-
+                        Requests leader pod co-location in the same topology
+                        domain as workers. Only meaningful when mode is
+                        Required, Preferred, or Unconstrained.
+                      type: boolean
+                # Phase 5: priority policy ref
+                priorityPolicyRef:
+                  description: >-
+                    Optional reference to a cluster-scoped CheckpointPriorityPolicy
+                    that configures checkpoint-aware priority shaping. When absent,
+                    no priority shaping is applied (Phase 4 behavior preserved).
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
                 control:
                   type: object
                   properties:
@@ -282,6 +349,10 @@ spec:
                         - Unknown
                     compatibilityReason:
                       type: string
+                    worldSize:
+                      description: World size recorded in the checkpoint manifest.
+                      type: integer
+                      format: int32
                 lastCompletedCheckpoint:
                   type: object
                   properties:
@@ -305,6 +376,10 @@ spec:
                         - Unknown
                     compatibilityReason:
                       type: string
+                    worldSize:
+                      description: World size recorded in the checkpoint manifest.
+                      type: integer
+                      format: int32
                 transitionTimestamps:
                   type: object
                   properties:
@@ -354,3 +429,156 @@ spec:
                 observedGeneration:
                   type: integer
                   format: int64
+                # Phase 3: admission status
+                admission:
+                  description: Admitted shape from Kueue.
+                  type: object
+                  properties:
+                    admittedWorkerCount:
+                      type: integer
+                      format: int32
+                    preferredWorkerCount:
+                      type: integer
+                      format: int32
+                    activeWorkerCount:
+                      type: integer
+                      format: int32
+                    admittedFlavors:
+                      type: object
+                      additionalProperties:
+                        type: string
+                # Phase 3: restore status
+                restore:
+                  description: Details of the most recent checkpoint restore.
+                  type: object
+                  properties:
+                    lastCheckpointWorldSize:
+                      type: integer
+                      format: int32
+                    lastRestoreWorldSize:
+                      type: integer
+                      format: int32
+                    restoreMode:
+                      type: string
+                      enum:
+                        - SameSize
+                        - Reshard
+                # Phase 4: launch readiness
+                launchReadiness:
+                  description: >-
+                    Pre-launch readiness state set by the ResumeReadiness
+                    AdmissionCheck controller. Nil when readiness gate is not active.
+                  type: object
+                  required:
+                    - ready
+                  properties:
+                    ready:
+                      type: boolean
+                    gateState:
+                      type: string
+                      enum:
+                        - Pending
+                        - Ready
+                        - Rejected
+                    reason:
+                      type: string
+                    message:
+                      type: string
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                # Phase 4: topology status
+                topology:
+                  description: >-
+                    Admitted topology assignment from Kueue TAS.
+                    Nil when topology is not enabled or not yet admitted.
+                  type: object
+                  properties:
+                    levels:
+                      type: array
+                      items:
+                        type: string
+                    domains:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          values:
+                            type: array
+                            items:
+                              type: string
+                          count:
+                            type: integer
+                            format: int32
+                # Phase 4: effective launch shape
+                effectiveLaunchShape:
+                  description: >-
+                    Computed launch shape derived from admission decisions.
+                    Nil before first admission.
+                  type: object
+                  properties:
+                    workerCount:
+                      type: integer
+                      format: int32
+                    worldSize:
+                      type: integer
+                      format: int32
+                    resumeMode:
+                      type: string
+                      enum:
+                        - SameSize
+                        - Reshard
+                    selectedCheckpointID:
+                      type: string
+                # Phase 5: priority shaping status
+                priorityShaping:
+                  description: >-
+                    Checkpoint-aware priority shaping state. Nil when no
+                    CheckpointPriorityPolicy is referenced.
+                  type: object
+                  properties:
+                    basePriority:
+                      description: Static priority from the WorkloadPriorityClass.
+                      type: integer
+                      format: int32
+                    effectivePriority:
+                      description: Dynamically computed priority written to Workload.Spec.Priority.
+                      type: integer
+                      format: int32
+                    preemptionState:
+                      description: Current preemption lifecycle state.
+                      type: string
+                      enum:
+                        - Protected
+                        - Active
+                        - Cooldown
+                        - Preemptible
+                    preemptionStateReason:
+                      description: Machine-readable reason for the current preemption state.
+                      type: string
+                    protectedUntil:
+                      description: Timestamp until which the startup protection window is active.
+                      type: string
+                      format: date-time
+                    lastCompletedCheckpointTime:
+                      description: Completion timestamp of the most recent checkpoint.
+                      type: string
+                      format: date-time
+                    checkpointAge:
+                      description: Age of the most recent checkpoint as a duration string.
+                      type: string
+                    lastYieldTime:
+                      description: Timestamp of the most recent yield (preemption).
+                      type: string
+                      format: date-time
+                    lastResumeTime:
+                      description: Timestamp of the most recent resume.
+                      type: string
+                      format: date-time
+                    recentYieldCount:
+                      description: Number of yields within the policy's yieldWindow.
+                      type: integer
+                      format: int32
+                    appliedPolicyRef:
+                      description: Name of the CheckpointPriorityPolicy last used to compute effective priority.
+                      type: string

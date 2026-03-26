@@ -1,0 +1,12 @@
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumeReadinessPolicy
+metadata:
+  name: default-resume-readiness
+spec:
+  # Require a complete checkpoint for resume. Initial launches are allowed
+  # without one. This is the recommended starting configuration.
+  requireCompleteCheckpoint: true
+  allowInitialLaunchWithoutCheckpoint: true
+  failurePolicy: FailClosed
+  # Uncomment to set a maximum checkpoint age (e.g., reject stale checkpoints):
+  # maxCheckpointAge: 1h
