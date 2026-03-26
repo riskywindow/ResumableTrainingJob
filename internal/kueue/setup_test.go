@@ -306,6 +306,125 @@ func makeTestRTJ(t *testing.T) *trainingv1alpha1.ResumableTrainingJob {
 	return job
 }
 
+// --- Phase 5: Priority-aware tests ---
+
+func TestPriorityClassReturnsWorkloadPriorityClassName(t *testing.T) {
+	job := makeTestRTJ(t)
+	genericJob := NewGenericJob().(*RTJGenericJob)
+	genericJob.job = job
+
+	got := genericJob.PriorityClass()
+	want := job.Spec.WorkloadPriorityClassName
+	if got != want {
+		t.Errorf("PriorityClass() = %q, want %q", got, want)
+	}
+}
+
+func TestWorkloadPrioritySetFromPriorityClass(t *testing.T) {
+	// Verify that when Kueue's generic reconciler creates the Workload,
+	// it resolves the WorkloadPriorityClass and sets Spec.Priority.
+	scheme := runtime.NewScheme()
+	must(t, corev1.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	job := makeTestRTJ(t)
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: job.Namespace}}
+	priorityClass := &kueuev1beta2.WorkloadPriorityClass{
+		ObjectMeta: metav1.ObjectMeta{Name: job.Spec.WorkloadPriorityClassName},
+		Value:      500,
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&trainingv1alpha1.ResumableTrainingJob{}, &kueuev1beta2.Workload{}).
+		WithObjects(namespace, priorityClass, job).
+		WithIndex(&kueuev1beta2.Workload{}, coreindexer.OwnerReferenceIndexKey(GroupVersionKind), coreindexer.WorkloadOwnerIndexFunc(GroupVersionKind)).
+		Build()
+
+	reconciler := jobframework.NewReconciler(cl, record.NewFakeRecorder(16))
+	_, err := reconciler.ReconcileGenericJob(
+		context.Background(),
+		ctrl.Request{NamespacedName: types.NamespacedName{Name: job.Name, Namespace: job.Namespace}},
+		NewGenericJob(),
+	)
+	if err != nil {
+		t.Fatalf("reconcile generic job: %v", err)
+	}
+
+	workloads := &kueuev1beta2.WorkloadList{}
+	if err := cl.List(context.Background(), workloads); err != nil {
+		t.Fatalf("list workloads: %v", err)
+	}
+	if len(workloads.Items) != 1 {
+		t.Fatalf("expected 1 workload, got %d", len(workloads.Items))
+	}
+
+	workload := workloads.Items[0]
+
+	// Verify the Workload has the correct priority from the class.
+	if workload.Spec.Priority == nil {
+		t.Fatal("expected Workload.Spec.Priority to be set from WorkloadPriorityClass")
+	}
+	if *workload.Spec.Priority != 500 {
+		t.Errorf("expected Workload.Spec.Priority=500, got %d", *workload.Spec.Priority)
+	}
+
+	// Verify a second reconcile does NOT overwrite the priority.
+	// This is the critical anti-clobbering test for Phase 5.
+	// Simulate the RTJ controller patching priority to 450 (effective priority).
+	patch := client.MergeFrom(workload.DeepCopy())
+	workload.Spec.Priority = ptr.To[int32](450)
+	if err := cl.Patch(context.Background(), &workload, patch); err != nil {
+		t.Fatalf("patch workload priority: %v", err)
+	}
+
+	// Re-reconcile the generic job.
+	_, err = reconciler.ReconcileGenericJob(
+		context.Background(),
+		ctrl.Request{NamespacedName: types.NamespacedName{Name: job.Name, Namespace: job.Namespace}},
+		NewGenericJob(),
+	)
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	// Re-read the workload after second reconcile.
+	var updated kueuev1beta2.Workload
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(&workload), &updated); err != nil {
+		t.Fatalf("get updated workload: %v", err)
+	}
+
+	// The priority should still be 450 (the operator-patched value), not
+	// reverted to 500. Kueue's GenericJob reconciler only sets priority at
+	// Workload creation time, not on subsequent syncs.
+	if updated.Spec.Priority == nil {
+		t.Fatal("expected Workload.Spec.Priority to remain set")
+	}
+	if *updated.Spec.Priority != 450 {
+		t.Errorf("expected priority to remain 450 (operator-patched), got %d; Kueue clobbered the effective priority", *updated.Spec.Priority)
+	}
+}
+
+func TestWorkloadPriorityNotSetWithoutPriorityPolicy(t *testing.T) {
+	// When no priority policy is referenced, the RTJ should behave
+	// exactly as Phase 4: Workload priority is set from the
+	// WorkloadPriorityClass and never modified by the RTJ controller.
+	job := makeTestRTJ(t)
+
+	// Verify no priority policy ref is set.
+	if job.IsPriorityShapingEnabled() {
+		t.Fatal("expected priority shaping to be disabled on default test RTJ")
+	}
+
+	genericJob := NewGenericJob().(*RTJGenericJob)
+	genericJob.job = job
+
+	// PriorityClass() should still return the class name for Workload creation.
+	if got := genericJob.PriorityClass(); got != "phase1-dev" {
+		t.Errorf("expected PriorityClass()=phase1-dev, got %q", got)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

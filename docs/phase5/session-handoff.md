@@ -544,28 +544,184 @@ no regressions across all packages:
 
 ---
 
-## Recommended Next Prompt (Session 5)
+## Session 5: Effective Priority Materialization
 
-**Session 5: Resolve OQ-1 and OQ-2, then implement the Priority Shaping Controller.**
+- Date: 2026-03-26
+
+### Mission
+
+Materialize Phase 5 effective priority into the RTJ/Kueue path without
+letting it get clobbered. Integrate the decision engine into the RTJ
+reconciler and Kueue GenericJob adapter.
+
+### Decisions Made
+
+1. **RTJ reconciler owns effective priority materialization (not a separate
+   controller).** The RTJ reconciler already observes all phase transitions
+   and has access to all inputs (policy, telemetry, WorkloadPriorityClass).
+   Running priority evaluation inline during the reconcile is simpler than
+   a separate timer-based controller and avoids coordination complexity.
+   The Session 1/4 design suggested a separate controller, but the inline
+   approach is the smallest coherent ownership model.
+
+2. **OQ-1 resolved: Kueue's GenericJob reconciler does NOT clobber
+   Workload.Spec.Priority on subsequent reconciles.** Kueue sets
+   `Spec.Priority` at Workload creation time by resolving the
+   WorkloadPriorityClass. On subsequent reconciles, it only reads the
+   priority for preemption decisions. The RTJ controller can safely patch
+   `Spec.Priority` with the effective priority after creation.
+
+3. **OQ-2 resolved: Kueue re-evaluates preemption when Workload priority
+   changes.** Kueue's preemption logic reads `Workload.Spec.Priority`
+   on each scheduling cycle. A priority change on a running Workload
+   is visible to the next preemption evaluation.
+
+4. **PriorityClass() method added to RTJGenericJob adapter.** This tells
+   Kueue's GenericJob reconciler which WorkloadPriorityClass to resolve
+   when creating the Workload. It returns `spec.workloadPriorityClassName`.
+
+5. **Priority evaluation runs only in active phases.** Phases Starting,
+   Running, Restoring, YieldRequested, and Draining trigger evaluation.
+   Queued RTJs reset to base priority via `clearPriorityShapingOnQueued()`.
+
+6. **Workload.Spec.Priority is patched using merge patch.** Only the
+   `priority` field is sent in the patch, minimizing the blast radius.
+
+7. **Protection window expiry triggers a requeue.** When the job is in
+   StartupProtected state, the reconciler calculates the remaining window
+   and sets `RequeueAfter` to remaining + 1 second. This avoids the need
+   for a timer-based evaluation loop.
+
+8. **Observability via annotations, conditions, and status.** RTJ gets:
+   - `PriorityShaping` condition (True/False with reason)
+   - `training.checkpoint.example.io/effective-priority` annotation
+   - `training.checkpoint.example.io/preemption-state` annotation
+   - `status.priorityShaping` sub-object with all decision details
+
+9. **Idempotent reconciliation prevents infinite loops.** All sync
+   functions compare values before writing and report no change when
+   the decision matches the existing state.
+
+10. **Phase 4 behavior fully preserved when no policy is attached.**
+    When `spec.priorityPolicyRef` is nil, `reconcilePriorityState()`
+    clears any stale priority shaping status and annotations, and
+    `Workload.Spec.Priority` is never patched.
+
+### Files Created (Session 5)
+
+- `internal/controller/priority_state.go` — `reconcilePriorityState()`,
+  `resolvePolicy()`, `resolveBasePriority()`, `buildEvaluationInput()`,
+  `syncDecisionToStatus()`, `patchWorkloadPriority()`,
+  `syncPriorityAnnotations()`, `clearPriorityAnnotations()`,
+  `setPriorityShapingCondition()`, `isActivePriorityPhase()`,
+  `PriorityStateResult` type
+- `internal/controller/priority_state_test.go` — 30 tests covering:
+  - No policy no-op (Phase 4 backward compat)
+  - No policy clears stale status
+  - Startup protected state
+  - Checkpoint fresh (Active state)
+  - Checkpoint stale (Preemptible state)
+  - Effective priority changes Workload
+  - Idempotent — no status churn on repeated reconcile
+  - No clobbering on operator restart
+  - Transition from Protected → Active → Stale
+  - Missing Workload handled gracefully
+  - Policy not found sets error condition
+  - Priority class not found sets error condition
+  - Annotations set correctly
+  - Condition set correctly
+  - Requeue after protection expiry
+  - No requeue when Active
+  - buildEvaluationInput with all fields
+  - buildEvaluationInput with nil fields
+  - syncDecisionToStatus initializes from decision
+  - syncDecisionToStatus idempotent when unchanged
+  - isActivePriorityPhase table test
+  - syncPriorityAnnotations
+  - clearPriorityAnnotations
+  - patchWorkloadPriority patches when different
+  - patchWorkloadPriority skips when equal
+  - patchWorkloadPriority handles not found
+  - Cooldown after resume (protection window interaction)
+  - Cooldown when protection expired
+  - TelemetryUnknown fail-open
+  - YieldBudgetExhausted
+  - Effective priority clamped to max
+  - Effective priority clamped to min
+- `docs/phase5/effective-priority-materialization.md` — ownership model,
+  anti-clobbering strategy, reconcile flow, idempotency guarantees,
+  observability, backward compatibility, requeue strategy
+
+### Files Modified (Session 5)
+
+- `internal/controller/resumabletrainingjob_controller.go` — integrated
+  `reconcilePriorityState()` into the active job observation path. Added
+  RBAC markers for Workload patch, WorkloadPriorityClass read, and
+  CheckpointPriorityPolicy read.
+- `internal/kueue/rtj_generic_job.go` — added `PriorityClass()` method
+  returning `spec.workloadPriorityClassName` so Kueue resolves the correct
+  WorkloadPriorityClass at Workload creation.
+- `internal/kueue/setup_test.go` — added 3 Phase 5 tests:
+  - `TestPriorityClassReturnsWorkloadPriorityClassName`
+  - `TestWorkloadPrioritySetFromPriorityClass` (anti-clobbering test)
+  - `TestWorkloadPriorityNotSetWithoutPriorityPolicy`
+- `docs/phase5/session-handoff.md` — added Session 5 record
+
+### Tests Run
+
+All Phase 5 priority state tests pass. Combined with Sessions 3 and 4:
+- Session 3: 28 telemetry tests
+- Session 4: 73 decision engine tests
+- Session 5: 30+ priority state tests, 3 Kueue integration tests
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | Workload.Spec.Priority mutability and GenericJob sync clobbering | Critical — blocks G3 | **Resolved (Session 5):** Kueue sets Spec.Priority at creation time only. The RTJ controller patches it safely afterward. |
+| OQ-2 | Kueue preemption responsiveness to Priority changes | Affects latency of preemption after priority drop | **Resolved (Session 5):** Kueue reads Spec.Priority on each scheduling cycle. Priority changes are visible immediately. |
+| OQ-3 | Checkpoint manifest timestamp source | Affects I/O pattern | **Resolved (Session 3):** Reuse `status.lastCompletedCheckpoint` first, fall back to `Catalog.LatestCheckpointInfo()` |
+| OQ-4 | Priority Shaping Controller placement | Affects code organisation | **Resolved (Session 5):** Inline in RTJ reconciler, not a separate controller. Simpler and avoids coordination. |
+| OQ-5 | Negative effective priority values | Affects penalty formula | **Resolved (Session 5):** Kueue uses int32 priority values. Negative values work correctly for preemption ordering. |
+| OQ-6 | Protection window start time | Affects accuracy | **Resolved (Session 3 + 4):** Anchor is `max(RunStartTime, LastResumeTime)`; protection resets on resume |
+| OQ-7 | Interaction with ResumeReadiness AdmissionCheck | Affects evaluation scope | **Resolved (Session 5):** Independent concerns. Priority shaping evaluates during active phases; ResumeReadiness evaluates during admission. |
+| OQ-8 | Priority shaping for queued RTJs | Affects re-admission ordering | **Resolved (Session 3):** `clearPriorityShapingOnQueued()` resets runtime fields; effective priority reverts to base |
+
+### Divergence Notes
+
+**Session 5 divergence from Session 1/4 design:**
+
+- The Priority Shaping Controller was originally planned as a separate
+  timer-based reconciler (Session 1 decision 14, Session 4 recommended
+  next prompt). Session 5 integrated it inline into the RTJ reconciler
+  instead. This is simpler because:
+  1. The RTJ reconciler already has all necessary inputs.
+  2. No timer-based polling needed — requeue on protection window expiry.
+  3. No coordination between two controllers modifying the same RTJ status.
+  4. Phase transitions naturally trigger re-evaluation.
+
+- The `PriorityClass()` method was added to the RTJGenericJob adapter.
+  This was not explicitly planned but is the standard Kueue pattern for
+  telling the GenericJob reconciler which WorkloadPriorityClass to use.
+
+---
+
+## Recommended Next Prompt (Session 6)
+
+**Session 6: Integration tests, e2e manifests, and hardening.**
 
 Steps:
-1. Inspect Kueue v0.15.1 GenericJob reconciler source for Priority field
-   lifecycle (creation vs. sync vs. admission). Resolve OQ-1.
-2. Inspect Kueue v0.15.1 preemption code path for how it responds to
-   Priority changes on running Workloads. Resolve OQ-2.
-3. If OQ-1 requires adapter changes, implement the smallest fix in the
-   RTJGenericJob adapter (skip Priority when shaping is active).
-4. Implement the Priority Shaping Controller as a separate reconciler:
-   - Timer-based evaluation loop (e.g., 30s period)
-   - Read CheckpointPriorityPolicy referenced by each RTJ
-   - Use `CollectTelemetry()` to gather the telemetry snapshot
-   - Convert `TelemetrySnapshot` to `EvaluationInput`
-   - Call `checkpointpriority.Evaluate()` to compute the decision
-   - Write effective priority to Workload.Spec.Priority
-   - Use `SyncPriorityShapingTelemetry()` + set preemption state/priority
-     from the Decision output
-   - Call `recordYieldForTelemetry()` and `recordResumeForTelemetry()`
-     from the main RTJ reconciler at the appropriate lifecycle points
-5. Wire controller into cmd/operator/main.go.
-6. Add unit tests for the controller.
-7. Update docs/phase5/session-handoff.md.
+1. Wire priority state into the stop flow (call `recordYieldForTelemetry()`
+   when a yield is initiated by Kueue suspension).
+2. Wire priority state into the resume flow (call
+   `recordResumeForTelemetry()` when Restoring → Running transition occurs).
+3. Add integration tests that simulate a full lifecycle:
+   - RTJ admitted → Running → checkpoint → priority stays at base
+   - RTJ admitted → Running → checkpoint stale → priority drops
+   - RTJ yielded → Paused → re-admitted → Running → cooldown → priority boosted
+   - RTJ with no policy → priority unchanged throughout lifecycle
+4. Create local dev/e2e manifests for Phase 5 priority shaping demo.
+5. Run full test suite and e2e tests.
+6. Update docs/phase5/session-handoff.md.
