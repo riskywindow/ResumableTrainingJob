@@ -35,6 +35,10 @@ Build on Phase 4's topology-aware admission pipeline to:
 
 - [dev-environment.md](dev-environment.md) - local dev profile, assumptions, quota design, why cohort/fair-sharing is excluded
 
+### E2E Testing
+
+- [e2e.md](e2e.md) - Phase 5 e2e test coverage, what each test proves, what remains deferred
+
 ### Migration
 
 - [migration-from-phase4.md](migration-from-phase4.md) - what stays, what changes, why effective priority is derived, why cohort/fair-sharing is deferred
