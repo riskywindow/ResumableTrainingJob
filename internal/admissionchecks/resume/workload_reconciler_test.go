@@ -35,6 +35,10 @@ func (m *mockCatalog) SelectResumeCheckpoint(_ context.Context, _ checkpoints.Re
 	return m.ref, m.ok, m.err
 }
 
+func (m *mockCatalog) LatestCheckpointInfo(_ context.Context, _ string) (*checkpoints.CheckpointInfo, bool, error) {
+	return nil, false, nil
+}
+
 // --- test helpers ---
 
 func reconcilerScheme(t *testing.T) *runtime.Scheme {

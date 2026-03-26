@@ -193,6 +193,57 @@ var (
 		},
 	)
 
+	// Phase 5 metrics.
+	priorityEvaluations = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "priority_evaluations_total",
+			Help:      "Total checkpoint-aware priority evaluations performed by the priority shaping controller.",
+		},
+	)
+	priorityPenaltiesApplied = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "priority_penalties_applied_total",
+			Help:      "Total times a priority penalty was applied (effective priority lowered below base).",
+		},
+	)
+	priorityProtectionWindowActive = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "priority_protection_window_active",
+			Help:      "Number of RTJs currently within their startup protection window.",
+		},
+	)
+	priorityEffectiveValue = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "priority_effective_value",
+			Help:      "Current effective priority value per RTJ.",
+		},
+		[]string{"rtj"},
+	)
+	priorityTelemetryFailures = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "priority_telemetry_failures_total",
+			Help:      "Total failures retrieving checkpoint telemetry for priority evaluation.",
+		},
+	)
+	priorityDrivenPreemptions = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "priority_driven_preemptions_total",
+			Help:      "Total preemptions where checkpoint-aware priority shaping influenced the outcome.",
+		},
+	)
+
 	// Phase 3 metrics.
 	admissionComparisons = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -277,6 +328,13 @@ func NewRecorder() *Recorder {
 			kueueSuspensionsObserved,
 			preemptionYieldsCompleted,
 			duplicateChildJobSetPreventions,
+			// Phase 5
+			priorityEvaluations,
+			priorityPenaltiesApplied,
+			priorityProtectionWindowActive,
+			priorityEffectiveValue,
+			priorityTelemetryFailures,
+			priorityDrivenPreemptions,
 			// Phase 4
 			launchesBlockedByReadinessGate,
 			readinessGateOutcomes,
@@ -522,5 +580,56 @@ func (r *Recorder) IncPhase4ResumeFailed() {
 func (r *Recorder) IncUnsupportedTopologyShapeFailure() {
 	if r != nil {
 		unsupportedTopologyShapeFailures.Inc()
+	}
+}
+
+// Phase 5 recorder methods.
+
+// IncPriorityEvaluation records a priority evaluation.
+func (r *Recorder) IncPriorityEvaluation() {
+	if r != nil {
+		priorityEvaluations.Inc()
+	}
+}
+
+// IncPriorityPenaltyApplied records a priority penalty application.
+func (r *Recorder) IncPriorityPenaltyApplied() {
+	if r != nil {
+		priorityPenaltiesApplied.Inc()
+	}
+}
+
+// SetPriorityProtectionWindowActive sets the gauge for active protection windows.
+func (r *Recorder) SetPriorityProtectionWindowActive(count float64) {
+	if r != nil {
+		priorityProtectionWindowActive.Set(count)
+	}
+}
+
+// SetPriorityEffectiveValue records the effective priority for a specific RTJ.
+func (r *Recorder) SetPriorityEffectiveValue(rtjKey string, value float64) {
+	if r != nil && rtjKey != "" {
+		priorityEffectiveValue.WithLabelValues(rtjKey).Set(value)
+	}
+}
+
+// RemovePriorityEffectiveValue removes the effective priority metric for an RTJ.
+func (r *Recorder) RemovePriorityEffectiveValue(rtjKey string) {
+	if r != nil && rtjKey != "" {
+		priorityEffectiveValue.DeleteLabelValues(rtjKey)
+	}
+}
+
+// IncPriorityTelemetryFailure records a telemetry retrieval failure.
+func (r *Recorder) IncPriorityTelemetryFailure() {
+	if r != nil {
+		priorityTelemetryFailures.Inc()
+	}
+}
+
+// IncPriorityDrivenPreemption records a priority-driven preemption.
+func (r *Recorder) IncPriorityDrivenPreemption() {
+	if r != nil {
+		priorityDrivenPreemptions.Inc()
 	}
 }

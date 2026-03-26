@@ -120,6 +120,16 @@ func (m CheckpointManifest) CompletionTime() (time.Time, error) {
 	return time.Parse(time.RFC3339, m.CompletionTimestamp)
 }
 
+// CheckpointInfo is a lightweight summary of the latest checkpoint for
+// telemetry purposes. It avoids the full compatibility check and artifact
+// validation that SelectResumeCheckpoint performs.
+type CheckpointInfo struct {
+	CheckpointID        string
+	GlobalStep          int64
+	CompletionTimestamp metav1.Time
+	ManifestURI         string
+}
+
 func (m CheckpointManifest) CheckpointReference(reason string) (v1alpha1.CheckpointReference, error) {
 	completedAt, err := m.CompletionTime()
 	if err != nil {

@@ -1374,6 +1374,10 @@ func (f *fakeCheckpointCatalog) SelectResumeCheckpoint(context.Context, checkpoi
 	return f.selectedCheckpoint, f.selected, f.err
 }
 
+func (f *fakeCheckpointCatalog) LatestCheckpointInfo(context.Context, string) (*checkpoints.CheckpointInfo, bool, error) {
+	return nil, false, nil
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
