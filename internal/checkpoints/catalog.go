@@ -15,6 +15,12 @@ import (
 type Catalog interface {
 	ObservePause(ctx context.Context, storageRoot string, runAttempt int32, requestID string, requestedAt time.Time) (*PauseObservation, bool, error)
 	SelectResumeCheckpoint(ctx context.Context, request ResumeRequest) (*v1alpha1.CheckpointReference, bool, error)
+	// LatestCheckpointInfo returns lightweight metadata about the most recent
+	// checkpoint in the storage root, without full compatibility checking or
+	// artifact validation. Used by the telemetry subsystem for Phase 5
+	// priority shaping decisions. Returns nil, false, nil when no manifests
+	// are found. The second return value is true when a valid checkpoint was found.
+	LatestCheckpointInfo(ctx context.Context, storageRoot string) (*CheckpointInfo, bool, error)
 }
 
 type PauseObservation struct {
@@ -194,10 +200,51 @@ func (c *ObjectStoreCatalog) validateManifestArtifacts(ctx context.Context, mani
 	return nil
 }
 
+func (c *ObjectStoreCatalog) LatestCheckpointInfo(
+	ctx context.Context,
+	storageRoot string,
+) (*CheckpointInfo, bool, error) {
+	manifestURIs, err := c.store.ListObjects(ctx, ManifestPrefixURI(storageRoot))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(manifestURIs) == 0 {
+		return nil, false, nil
+	}
+
+	var latest *CheckpointInfo
+	for _, uri := range manifestURIs {
+		manifest, err := c.readManifest(ctx, uri)
+		if err != nil {
+			continue
+		}
+		ct, err := manifest.CompletionTime()
+		if err != nil {
+			continue
+		}
+		if latest == nil || ct.After(latest.CompletionTimestamp.Time) {
+			latest = &CheckpointInfo{
+				CheckpointID:        manifest.CheckpointID,
+				GlobalStep:          manifest.GlobalStep,
+				CompletionTimestamp: metav1.Time{Time: ct},
+				ManifestURI:         manifest.ManifestURI,
+			}
+		}
+	}
+	if latest == nil {
+		return nil, false, nil
+	}
+	return latest, true, nil
+}
+
 func (c *NoopCatalog) ObservePause(context.Context, string, int32, string, time.Time) (*PauseObservation, bool, error) {
 	return nil, false, nil
 }
 
 func (c *NoopCatalog) SelectResumeCheckpoint(context.Context, ResumeRequest) (*v1alpha1.CheckpointReference, bool, error) {
+	return nil, false, nil
+}
+
+func (c *NoopCatalog) LatestCheckpointInfo(context.Context, string) (*CheckpointInfo, bool, error) {
 	return nil, false, nil
 }

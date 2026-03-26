@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -458,4 +459,106 @@ func stringMapsEqual(left, right map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// --- Phase 5: Telemetry lifecycle helpers ---
+//
+// These helpers layer Phase 5 telemetry recording on top of existing mark*
+// functions. They are called by the main reconciler and the priority shaping
+// controller to keep priority shaping status in sync with lifecycle events.
+// They do NOT modify existing Phase 4 behavior—they only populate
+// PriorityShapingStatus fields when a policy is attached.
+
+// recordYieldForTelemetry appends a yield event to the yield history
+// annotation and updates the PriorityShapingStatus.LastYieldTime.
+// Call after markStopRequested when the stop source is a Kueue preemption
+// or manual pause. The yieldWindow controls how far back the windowed
+// yield count extends.
+//
+// Returns true when the RTJ's metadata or status was changed.
+func recordYieldForTelemetry(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	now metav1.Time,
+	yieldWindow time.Duration,
+) bool {
+	if !job.IsPriorityShapingEnabled() {
+		return false
+	}
+	changed := RecordYieldEvent(job, now, yieldWindow)
+	if job.Status.PriorityShaping == nil {
+		job.Status.PriorityShaping = &trainingv1alpha1.PriorityShapingStatus{}
+	}
+	if !timesEqual(job.Status.PriorityShaping.LastYieldTime, &now) {
+		job.Status.PriorityShaping.LastYieldTime = &now
+		changed = true
+	}
+	return changed
+}
+
+// recordResumeForTelemetry updates the PriorityShapingStatus.LastResumeTime
+// when the RTJ transitions from Restoring to Running. Call after markRunning
+// when the previous phase was Restoring.
+//
+// Returns true when the RTJ's status was changed.
+func recordResumeForTelemetry(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	now metav1.Time,
+) bool {
+	if !job.IsPriorityShapingEnabled() {
+		return false
+	}
+	if job.Status.PriorityShaping == nil {
+		job.Status.PriorityShaping = &trainingv1alpha1.PriorityShapingStatus{}
+	}
+	if !timesEqual(job.Status.PriorityShaping.LastResumeTime, &now) {
+		job.Status.PriorityShaping.LastResumeTime = &now
+		changed := true
+		// Record applied policy ref.
+		if job.Spec.PriorityPolicyRef != nil && job.Status.PriorityShaping.AppliedPolicyRef != job.Spec.PriorityPolicyRef.Name {
+			job.Status.PriorityShaping.AppliedPolicyRef = job.Spec.PriorityPolicyRef.Name
+			changed = true
+		}
+		return changed
+	}
+	return false
+}
+
+// clearPriorityShapingOnQueued clears the priority shaping status fields
+// that are only meaningful while running. Called when the RTJ transitions
+// to Queued so that the priority reverts to base (Phase 5 design: queued
+// RTJs reset to base priority).
+//
+// Returns true when the RTJ's status was changed.
+func clearPriorityShapingOnQueued(
+	job *trainingv1alpha1.ResumableTrainingJob,
+) bool {
+	if job.Status.PriorityShaping == nil {
+		return false
+	}
+	ps := job.Status.PriorityShaping
+	changed := false
+	// Clear runtime-only fields but preserve historical timestamps
+	// (LastYieldTime, LastResumeTime) for the priority shaping controller
+	// to use when computing yield budgets on re-admission.
+	if ps.PreemptionState != "" {
+		ps.PreemptionState = ""
+		changed = true
+	}
+	if ps.PreemptionStateReason != "" {
+		ps.PreemptionStateReason = ""
+		changed = true
+	}
+	if ps.ProtectedUntil != nil {
+		ps.ProtectedUntil = nil
+		changed = true
+	}
+	if ps.CheckpointAge != "" {
+		ps.CheckpointAge = ""
+		changed = true
+	}
+	if ps.EffectivePriority != ps.BasePriority {
+		ps.EffectivePriority = ps.BasePriority
+		changed = true
+	}
+	return changed
 }

@@ -259,9 +259,162 @@ The Session 1 design sketch was explicitly marked as preliminary.
 
 ---
 
-## Recommended Next Prompt (Session 3)
+## Session 3: Telemetry and Status Plumbing
 
-**Session 3: Resolve OQ-1 and OQ-2, then implement the Priority Shaping Controller.**
+- Date: 2026-03-26
+
+### Mission
+
+Add the telemetry and status plumbing needed so Phase 5 can compute
+checkpoint-aware protection state. No priority decision engine yet.
+
+### Decisions Made
+
+1. **Checkpoint telemetry prefers RTJ status over catalog I/O.** The
+   `CollectTelemetry()` function first checks `status.lastCompletedCheckpoint`
+   (set during the drain flow) and only falls back to the catalog's
+   `LatestCheckpointInfo()` when the status field is nil. This avoids S3
+   round-trips on every reconcile.
+
+2. **Yield history uses an annotation, not a status field.** The
+   `training.checkpoint.example.io/yield-history` annotation stores a JSON
+   array of RFC3339 timestamps. This supports windowed counting across
+   multiple run attempts. A simple counter could not expire old entries.
+
+3. **checkpointAge is computed at reconcile time.** It is derived from
+   `now - lastCompletedCheckpointTime` on each evaluation rather than
+   persisted, avoiding status update churn for a constantly-changing value.
+
+4. **Phase 5 telemetry is no-op when no policy is attached.** All new
+   status helper functions (`recordYieldForTelemetry`, `recordResumeForTelemetry`,
+   `clearPriorityShapingOnQueued`) check `IsPriorityShapingEnabled()` and
+   return false immediately when no `spec.priorityPolicyRef` is set. This
+   preserves Phase 4 behavior exactly.
+
+5. **`LatestCheckpointInfo` is a lightweight catalog method.** It scans
+   manifests and picks the latest by `completionTimestamp` without artifact
+   validation or compatibility checking. This is specifically for telemetry
+   freshness, not resume selection.
+
+6. **Telemetry sync does not compute preemption state or effective priority.**
+   `SyncPriorityShapingTelemetry()` only writes observability fields
+   (checkpoint time, age, yield time, resume time, yield count, applied
+   policy). The preemption state machine and priority formula are the
+   priority shaping controller's responsibility (Session 4).
+
+7. **No SDK or fixture changes needed.** The existing manifest format
+   already records `completionTimestamp` and `globalStep`. The fixture
+   already supports `--sleep-per-step` and `--checkpoint-every` for
+   deterministic timing. No new runtime knobs were required.
+
+### Files Created (Session 3)
+
+- `internal/controller/telemetry.go` — `TelemetrySnapshot` type,
+  `CollectTelemetry()`, `SyncPriorityShapingTelemetry()`,
+  `RecordYieldEvent()`, yield history annotation parsing/serialization
+- `internal/controller/telemetry_test.go` — 28 tests covering:
+  - Checkpoint completion updates RTJ-visible telemetry (from status)
+  - Checkpoint fallback to catalog when status lacks data
+  - No checkpoint available (nil catalog, empty catalog)
+  - Lifecycle timestamp extraction (start, run, yield, drain, resume)
+  - Resume time fallback to RunningAt
+  - Drain duration not set when paused before yield
+  - Yield count windowing: no history, all within window, some expired,
+    zero window disables counting
+  - RecordYieldEvent append and prune logic
+  - RecordYieldEvent creates annotations map if nil
+  - SyncTelemetry clears status when no policy
+  - SyncTelemetry initializes status with policy
+  - SyncTelemetry idempotent when no change
+  - CheckpointAge recomputed each reconcile
+  - Operator restart preserves existing telemetry
+  - Operator restart falls back to catalog
+  - recordYieldForTelemetry no-op without policy
+  - recordYieldForTelemetry with policy
+  - recordResumeForTelemetry no-op without policy
+  - recordResumeForTelemetry with policy
+  - clearPriorityShapingOnQueued
+  - clearPriorityShapingOnQueued nil status no-op
+  - Yield history round-trip serialization
+  - Invalid JSON parsing
+  - Empty array parsing
+  - Invalid timestamp parsing
+  - Nil catalog safety
+- `docs/phase5/telemetry.md` — telemetry reference documenting data
+  sources, field semantics, idempotency guarantees, Prometheus metrics
+
+### Files Modified (Session 3)
+
+- `internal/checkpoints/types.go` — added `CheckpointInfo` struct for
+  lightweight checkpoint metadata
+- `internal/checkpoints/catalog.go` — added `LatestCheckpointInfo()`
+  to `Catalog` interface, implemented in `ObjectStoreCatalog` and
+  `NoopCatalog`
+- `internal/controller/status_helpers.go` — added Phase 5 lifecycle
+  telemetry helpers: `recordYieldForTelemetry()`,
+  `recordResumeForTelemetry()`, `clearPriorityShapingOnQueued()`
+- `internal/metrics/metrics.go` — added six Phase 5 Prometheus metrics
+  and recorder methods
+- `internal/controller/resumabletrainingjob_controller_test.go` — added
+  `LatestCheckpointInfo` to `fakeCheckpointCatalog`
+- `internal/admissionchecks/resume/workload_reconciler_test.go` — added
+  `LatestCheckpointInfo` to `mockCatalog`
+
+### Tests Run
+
+All 28 new Phase 5 telemetry tests pass. Full test suite passes with
+no regressions across all packages:
+- `api/v1alpha1` — pass
+- `internal/admissionchecks/resume` — pass
+- `internal/checkpoints` — pass
+- `internal/controller` — pass
+- `internal/jobset` — pass
+- `internal/kueue` — pass
+- `internal/topology` — pass
+- `test/e2e` — pass
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | Workload.Spec.Priority mutability and GenericJob sync clobbering | Critical — blocks G3 | Open — must inspect Kueue v0.15.1 GenericJob reconciler source |
+| OQ-2 | Kueue preemption responsiveness to Priority changes | Affects latency of preemption after priority drop | Open — review Kueue preemption code path |
+| OQ-3 | Checkpoint manifest timestamp source | Affects I/O pattern | **Resolved (Session 3):** Reuse `status.lastCompletedCheckpoint` first, fall back to `Catalog.LatestCheckpointInfo()` |
+| OQ-4 | Priority Shaping Controller placement | Affects code organisation | Tentatively resolved: separate controller |
+| OQ-5 | Negative effective priority values | Affects penalty formula | Open — verify Kueue handles negative int32 |
+| OQ-6 | Protection window start time | Affects accuracy | **Resolved (Session 3):** Use `transitionTimestamps.runningAt` or `restoreCompletedAt` as the protection window anchor |
+| OQ-7 | Interaction with ResumeReadiness AdmissionCheck | Affects evaluation scope | Tentatively resolved: independent concerns |
+| OQ-8 | Priority shaping for queued RTJs | Affects re-admission ordering | **Resolved (Session 3):** `clearPriorityShapingOnQueued()` resets runtime fields; effective priority reverts to base |
+
+### Divergence Notes
+
+**Session 2 divergence from Session 1 design:**
+
+- CRD renamed from `PriorityShapingPolicy` to `CheckpointPriorityPolicy`.
+  The original name was a placeholder; the new name is more specific.
+- RTJ field renamed from `spec.priorityShapingRef` to `spec.priorityPolicyRef`.
+- Policy spec fields differ from Session 1's G5 sketch:
+  - `protectionDuration` → `startupProtectionWindow` (more precise name)
+  - `freshnessThreshold` → `checkpointFreshnessTarget` (aligns with domain)
+  - `penaltyStepSize` and `maxPenalty` → replaced by four state-specific
+    adjustments (protectedBoost, cooldownBoost, staleCheckpointBoost,
+    preemptibleOffset) which are more flexible and explicit
+  - `evaluationInterval` → deferred to controller implementation (not a policy
+    field; it's a controller configuration concern)
+  - Added: `minRuntimeBetweenYields`, `maxYieldsPerWindow`, `yieldWindow`,
+    `failOpenOnTelemetryLoss`, `failOpenOnCheckpointStoreErrors`,
+    `minEffectivePriority`, `maxEffectivePriority`
+
+These divergences are intentional refinements that emerged during implementation.
+The Session 1 design sketch was explicitly marked as preliminary.
+
+---
+
+## Recommended Next Prompt (Session 4)
+
+**Session 4: Resolve OQ-1 and OQ-2, then implement the Priority Shaping Controller.**
 
 Steps:
 1. Inspect Kueue v0.15.1 GenericJob reconciler source for Priority field
@@ -271,11 +424,15 @@ Steps:
 3. If OQ-1 requires adapter changes, implement the smallest fix in the
    RTJGenericJob adapter (skip Priority when shaping is active).
 4. Implement the Priority Shaping Controller as a separate reconciler:
-   - Timer-based evaluation loop
+   - Timer-based evaluation loop (e.g., 30s period)
    - Read CheckpointPriorityPolicy referenced by each RTJ
-   - Compute preemption state and effective priority
+   - Use `CollectTelemetry()` to gather the telemetry snapshot
+   - Compute preemption state using the state machine
+   - Compute effective priority using the formula
    - Write effective priority to Workload.Spec.Priority
-   - Update RTJ status.priorityShaping
+   - Use `SyncPriorityShapingTelemetry()` + set preemption state/priority
+   - Call `recordYieldForTelemetry()` and `recordResumeForTelemetry()`
+     from the main RTJ reconciler at the appropriate lifecycle points
 5. Wire controller into cmd/operator/main.go.
 6. Add unit tests for the controller.
 7. Update docs/phase5/session-handoff.md.
