@@ -16,6 +16,9 @@ PHASE3_RTJ_NAME ?= phase3-demo
 PHASE3_TRAINER_IMAGE ?= $(PHASE2_TRAINER_IMAGE)
 PHASE4_RTJ_NAME ?= phase4-demo
 PHASE4_TRAINER_IMAGE ?= $(PHASE3_TRAINER_IMAGE)
+PHASE5_LOW_RTJ_NAME ?= phase5-low-demo
+PHASE5_HIGH_RTJ_NAME ?= phase5-high-demo
+PHASE5_TRAINER_IMAGE ?= $(PHASE4_TRAINER_IMAGE)
 
 .PHONY: dev-up dev-down dev-status dev-smoke phase2-smoke load-images submit-example pause-example resume-example inspect-example submit-low submit-high inspect-rtj inspect-kueue e2e e2e-phase2
 .PHONY: phase3-up phase3-down phase3-status phase3-load-images phase3-smoke phase3-profile e2e-phase3
@@ -24,6 +27,7 @@ PHASE4_TRAINER_IMAGE ?= $(PHASE3_TRAINER_IMAGE)
 .PHONY: phase4-submit-topology phase4-submit-gated-resume
 .PHONY: phase4-inspect-workload phase4-inspect-admissioncheck phase4-inspect-topology phase4-inspect-checkpoints
 .PHONY: e2e-phase4
+.PHONY: phase5-up phase5-down phase5-status phase5-load-images phase5-smoke phase5-profile
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -260,3 +264,72 @@ phase4-inspect-checkpoints:
 
 e2e-phase4:
 	RUN_KIND_E2E=1 PHASE4_TRAINER_IMAGE=$(PHASE4_TRAINER_IMAGE) go test ./test/e2e -run 'TestResumeReadinessGate|TestTopologyAwareLaunch|TestTopologyAwareResume' -v -timeout 20m
+
+# ── Phase 5 targets ──────────────────────────────────────────────────
+#
+# phase5-up:          Create kind cluster, install base stack, then apply
+#                     Phase 5 checkpoint-aware priority shaping profile.
+#                     Uses the default kind config (1 control-plane, 1 worker).
+# phase5-down:        Delete the kind cluster.
+# phase5-status:      Show cluster state including priority classes, policies,
+#                     queues, and checkpoint priority policy details.
+# phase5-load-images: Load images into the Phase 5 cluster.
+# phase5-smoke:       Run Phase 5 infrastructure smoke test. Verifies CRDs,
+#                     sample policy, preemption-capable queue, priority classes,
+#                     and sample RTJ dry-run validation.
+# phase5-profile:     Apply/re-apply Phase 5 profile on existing cluster.
+#
+# The Phase 5 profile exercises:
+#   G1: Checkpoint-aware effective priority derivation
+#   G2: Yield budgets / protection windows
+#   G3: Effective priority written to Kueue Workload.Spec.Priority
+#   G4: Deterministic within-ClusterQueue preemption profile
+#
+# Scope boundaries:
+#   - withinClusterQueue LowerPriority preemption ONLY
+#   - reclaimWithinCohort: Never (disabled)
+#   - borrowWithinCohort: disabled
+#   - No cohort, no Fair Sharing
+#
+# Sample RTJs in deploy/dev/phase5/samples/:
+#   rtj-low-priority.yaml   — Low base priority (100) with priority shaping
+#   rtj-high-priority.yaml  — High base priority (10000) with priority shaping
+
+phase5-up:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/dev-up.sh
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/install-phase5-profile.sh
+
+phase5-down:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-down.sh
+
+phase5-status:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/status.sh
+	@echo
+	@echo "phase5 priority classes:"
+	@kubectl get workloadpriorityclasses.kueue.x-k8s.io -l checkpoint-native.dev/profile=phase5-priority-shaping --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+	@echo "phase5 checkpoint priority policies:"
+	@kubectl get checkpointprioritypolicies.training.checkpoint.example.io --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+	@echo "phase5 queues:"
+	@kubectl get clusterqueues.kueue.x-k8s.io phase5-cq --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@kubectl get localqueues.kueue.x-k8s.io -n $(DEV_NAMESPACE) phase5-training --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+
+phase5-load-images:
+	@set -euo pipefail; \
+	for image in $(IMAGES); do \
+		echo "loading $$image into kind cluster $(KIND_CLUSTER_NAME)"; \
+		kind load docker-image --name $(KIND_CLUSTER_NAME) "$$image"; \
+	done
+
+phase5-smoke:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/phase5-smoke.sh
+
+phase5-profile:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/phase5-profile.sh

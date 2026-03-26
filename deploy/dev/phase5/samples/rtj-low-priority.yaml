@@ -1,0 +1,108 @@
+# Phase 5 sample: low-priority RTJ with checkpoint-aware priority shaping.
+#
+# This RTJ uses:
+#   - WorkloadPriorityClass: phase5-low (base priority 100)
+#   - CheckpointPriorityPolicy: dev-checkpoint-priority
+#   - Queue: phase5-training → phase5-cq (LowerPriority preemption)
+#
+# Lifecycle:
+#   1. Job starts → StartupProtected (effective priority = 100 + 50 = 150)
+#   2. Protection window expires (30s) → Active (effective priority = 100)
+#   3. Checkpoint completes → stays Active while checkpoint is fresh
+#   4. Checkpoint stales (>60s) → Preemptible (effective priority = 100 - 500 = -400)
+#   5. If preempted by high-priority RTJ → yielded → paused → re-admitted
+#   6. On resume → Cooldown (effective priority = 100 + 25 = 125)
+#
+# Trainer env vars for deterministic behaviour:
+#   SLEEP_PER_STEP=5    — 5 seconds per training step (slowed for observability)
+#   CHECKPOINT_EVERY=3  — checkpoint every 3 steps (15s between checkpoints)
+#   TOTAL_STEPS=100     — run long enough to observe full priority lifecycle
+#
+# With these settings:
+#   - First checkpoint at ~15s (within the 30s protection window)
+#   - Checkpoints every 15s thereafter
+#   - If a checkpoint is missed or delayed >60s, the RTJ transitions to Preemptible
+#
+# Placeholders:
+#   __RTJ_NAME__       -> RTJ name (default: phase5-low-demo)
+#   __TRAINER_IMAGE__  -> trainer container image
+#   __DEV_NAMESPACE__  -> target namespace (default: checkpoint-dev)
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase5-training
+    kueue.x-k8s.io/priority-class: phase5-low
+spec:
+  suspend: true
+  queueName: phase5-training
+  workloadPriorityClassName: phase5-low
+  priorityPolicyRef:
+    name: dev-checkpoint-priority
+  control:
+    desiredState: Running
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: cpu-only
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: AWS_ACCESS_KEY_ID
+                            value: minioadmin
+                          - name: AWS_SECRET_ACCESS_KEY
+                            value: minioadmin123
+                          - name: AWS_ENDPOINT_URL
+                            value: http://minio.checkpoint-dev.svc.cluster.local:9000
+                          - name: AWS_DEFAULT_REGION
+                            value: us-east-1
+                          # Deterministic trainer timing for Phase 5 e2e.
+                          - name: SLEEP_PER_STEP
+                            value: "5"
+                          - name: CHECKPOINT_EVERY
+                            value: "3"
+                          - name: TOTAL_STEPS
+                            value: "100"
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

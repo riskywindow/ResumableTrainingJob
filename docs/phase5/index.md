@@ -29,6 +29,11 @@ Build on Phase 4's topology-aware admission pipeline to:
 
 - [telemetry.md](telemetry.md) - telemetry fields, data sources, idempotency guarantees, Prometheus metrics
 - [policy-engine.md](policy-engine.md) - decision state model, evaluation order, effective priority formula, test coverage
+- [effective-priority-materialization.md](effective-priority-materialization.md) - ownership model, anti-clobbering strategy, reconcile flow
+
+### Dev Environment
+
+- [dev-environment.md](dev-environment.md) - local dev profile, assumptions, quota design, why cohort/fair-sharing is excluded
 
 ### Migration
 
