@@ -1,0 +1,63 @@
+# Kueue Controller Manager Configuration for the MANAGER cluster.
+#
+# This configuration enables MultiKueue dispatch of ResumableTrainingJob (RTJ)
+# to worker clusters. It must be applied to the Kueue installation on the
+# manager cluster.
+#
+# Key settings:
+#   - integrations.externalFrameworks includes the RTJ external framework name
+#   - Feature gates MultiKueue and MultiKueueAdaptersForCustomJobs are
+#     Beta and default-on in Kueue v0.15.1, so they do not need to be
+#     explicitly set unless they were previously disabled.
+#
+# Pinned versions:
+#   - Kueue v0.15.1
+#   - RTJ CRD: training.checkpoint.example.io/v1alpha1
+#
+# Usage:
+#   This file is a Kueue Configuration resource that can be referenced by
+#   the Kueue controller manager deployment via --config flag, or merged
+#   into a Helm values file under controllerManager.config.
+apiVersion: config.kueue.x-k8s.io/v1beta2
+kind: Configuration
+health:
+  healthProbeBindAddress: :8081
+metrics:
+  bindAddress: :8443
+  enableClusterQueueResources: true
+webhook:
+  port: 9443
+leaderElection:
+  leaderElect: true
+  resourceName: c1f6bfd2.kueue.x-k8s.io
+controller:
+  groupKindConcurrency:
+    Job.batch: 5
+    Pod: 5
+    Workload.kueue.x-k8s.io: 5
+    LocalQueue.kueue.x-k8s.io: 1
+    ClusterQueue.kueue.x-k8s.io: 1
+    ResourceFlavor.kueue.x-k8s.io: 1
+clientConnection:
+  qps: 50
+  burst: 100
+manageJobsWithoutQueueName: false
+managedJobsNamespaceSelector:
+  matchLabels:
+    checkpoint-native.dev/kueue-managed: "true"
+integrations:
+  frameworks:
+    - batch/job
+    - jobset.x-k8s.io/jobset
+  externalFrameworks:
+    - ResumableTrainingJob.v1alpha1.training.checkpoint.example.io
+# MultiKueue configuration section.
+# The multiKueue block is optional in the Configuration resource because
+# MultiKueue runtime behavior is controlled by the AdmissionCheck +
+# MultiKueueConfig + MultiKueueCluster resources, not by the config file.
+# However, documenting it here shows the intended setup.
+#
+# Feature gates (all Beta, default-on in v0.15.1 -- no explicit override needed):
+#   MultiKueue: true
+#   MultiKueueAdaptersForCustomJobs: true
+#   MultiKueueBatchJobWithManagedBy: true

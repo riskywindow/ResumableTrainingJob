@@ -25,6 +25,8 @@ Build on Phase 5's checkpoint-aware priority shaping to:
 ### Implementation
 
 - [operator-modes.md](operator-modes.md) - operator mode split: manager vs worker mode semantics, ownership table, detection logic, configuration, test coverage
+- [multikueue-integration.md](multikueue-integration.md) - MultiKueue external-framework integration: manager/worker setup, RBAC, spec.managedBy, mirror-copy execution model
+- [adr/0003-rtj-as-external-framework.md](adr/0003-rtj-as-external-framework.md) - ADR for RTJ as MultiKueue external framework via Kueue's generic adapter
 
 ### API
 

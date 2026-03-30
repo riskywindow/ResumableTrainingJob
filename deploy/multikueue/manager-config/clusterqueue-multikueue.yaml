@@ -1,0 +1,38 @@
+# ClusterQueue with MultiKueue AdmissionCheck for the MANAGER cluster.
+#
+# This ClusterQueue uses the "multikueue" AdmissionCheck so that all
+# Workloads admitted to this queue are dispatched to worker clusters via
+# MultiKueue instead of being satisfied with local resources.
+#
+# The manager cluster typically does not need real ResourceFlavors or
+# resource quotas because the actual resources are on worker clusters.
+# The ClusterQueue here acts as a routing layer.
+#
+# In a production setup, you would typically have:
+#   - One ClusterQueue per tenant/team on the manager cluster
+#   - Each ClusterQueue referencing the "multikueue" AdmissionCheck
+#   - Worker clusters with their own ClusterQueues and real resource quotas
+#
+# This example uses a minimal resource group to satisfy the Kueue schema.
+# The actual quota enforcement happens on the worker clusters.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: multikueue-training-cq
+spec:
+  admissionChecks:
+    - multikueue
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
+      flavors:
+        - name: default-flavor
+          resources:
+            - name: cpu
+              nominalQuota: "1000"
+            - name: memory
+              nominalQuota: "1000Gi"
+            - name: nvidia.com/gpu
+              nominalQuota: "100"

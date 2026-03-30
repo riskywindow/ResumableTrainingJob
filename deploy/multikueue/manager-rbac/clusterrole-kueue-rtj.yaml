@@ -1,0 +1,39 @@
+# ClusterRole granting Kueue's controller manager the permissions it needs
+# to manage ResumableTrainingJob objects for MultiKueue external-framework
+# dispatch on the MANAGER cluster.
+#
+# Kueue's MultiKueue external-framework adapter (externalframeworks.Adapter)
+# operates on RTJ objects as unstructured resources. It needs:
+#
+# For the MANAGER-SIDE (local) RTJ:
+#   - get, list, watch: to observe RTJ objects and check spec.managedBy
+#   - update, patch: to write status mirrored from the remote worker RTJ
+#
+# For the WORKER-SIDE (remote) RTJ via the MultiKueueCluster remote client:
+#   - create: to create the remote RTJ copy
+#   - get, list, watch: to read remote RTJ status and receive watch events
+#   - delete: to clean up the remote RTJ on completion or manager-side deletion
+#
+# NOTE: This ClusterRole is for the MANAGER cluster's Kueue installation.
+# The worker-side permissions are granted via the kubeconfig in the
+# MultiKueueCluster Secret, not via this ClusterRole.
+#
+# The RTJ operator itself does NOT need additional RBAC for MultiKueue --
+# the operator's existing RBAC covers RTJ management. This ClusterRole
+# is specifically for the Kueue controller manager process.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kueue-multikueue-rtj-manager
+  labels:
+    app.kubernetes.io/component: multikueue
+    app.kubernetes.io/part-of: checkpoint-native-preemption-controller
+rules:
+  # RTJ objects -- read and status write for the external-framework adapter.
+  - apiGroups: ["training.checkpoint.example.io"]
+    resources: ["resumabletrainingjobs"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  # RTJ status subresource -- required for mirroring remote status.
+  - apiGroups: ["training.checkpoint.example.io"]
+    resources: ["resumabletrainingjobs/status"]
+    verbs: ["get", "update", "patch"]

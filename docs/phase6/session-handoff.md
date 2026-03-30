@@ -354,15 +354,198 @@ respected:
 
 ---
 
+## Session 4: MultiKueue External-Framework Integration
+
+- Date: 2026-03-30
+
+### Decisions Made
+
+1. **RTJ uses Kueue's generic external-framework adapter, not a custom
+   MultiKueueAdapter.** Kueue v0.15.1 ships `externalframeworks.Adapter`
+   (in `pkg/controller/admissionchecks/multikueue/externalframeworks/adapter.go`)
+   which handles any CRD listed in `integrations.externalFrameworks` via
+   unstructured objects. No RTJ-specific Go code is needed in Kueue.
+
+2. **Two feature gates required (both Beta, default-on in v0.15.1):**
+   - `MultiKueue` (Beta since v0.9, default true)
+   - `MultiKueueAdaptersForCustomJobs` (Beta since v0.15, default true)
+   No explicit configuration needed unless previously disabled.
+
+3. **The generic adapter strips `spec.managedBy` on remote creation.**
+   When creating the remote RTJ copy on a worker, the adapter removes
+   `spec.managedBy` so the worker Kueue and RTJ operator treat it as a
+   normal local job.
+
+4. **Status mirroring is full `.status` unstructured copy.** The adapter
+   copies the entire `.status` from remote to local via unstructured patch.
+   All Phase 1-5 status fields flow through automatically.
+
+5. **Spec mutations are NOT propagated.** The adapter deletes and recreates
+   the remote Workload if the local spec drifts (except elastic scale-down).
+   Pause propagation must use Kueue Workload suspension, not spec patching.
+
+6. **Remote cleanup is automatic.** The adapter handles deletion on
+   manager-side deletion, spec drift, and periodic GC (default 1 minute).
+
+7. **`KeepAdmissionCheckPending` returns true for external frameworks.**
+   This keeps the manager-side RTJ suspended while the remote copy runs,
+   providing a second layer of protection (in addition to `--mode=manager`)
+   against accidental local JobSet creation.
+
+8. **RBAC is required on both clusters.** Manager-side Kueue needs read +
+   status-write on RTJ. Worker-side remote client needs create + get +
+   delete on RTJ and full Workload management.
+
+### OQ Resolutions
+
+| ID | Resolution | Evidence |
+|---|---|---|
+| OQ-1 | **Resolved.** Generic adapter handles external-framework CRDs. No custom MultiKueueAdapter needed. The adapter checks `spec.managedBy` via `IsJobManagedByKueue()` and uses unstructured operations. | `externalframeworks/adapter.go` lines 50-120 |
+| OQ-2 | **Resolved.** Spec mutations are NOT propagated. Out-of-sync remote Workloads are deleted and recreated. Pause requires Kueue Workload suspension. | `workload.go` lines 366-383 |
+| OQ-3 | **Resolved.** Full `.status` copy via `adapter.syncStatus()` using unstructured map copy. Combined with Workload-level status sync. | `externalframeworks/adapter.go` `syncStatus()` + `copyStatusFromRemote()` |
+| OQ-7 | **Resolved.** `MultiKueue` Beta (default-on since v0.9), `MultiKueueAdaptersForCustomJobs` Beta (default-on since v0.15). No explicit config needed. | `pkg/features/kube_features.go` |
+| OQ-8 | **Resolved.** Manager-side deletion triggers `RemoveRemoteObjects()` which deletes remote job (background propagation) + removes finalizer + deletes remote Workload. Periodic GC also handles orphans. | `workload.go` lines 140-161, 234-243; `multikueuecluster.go` `runGC()` |
+| OQ-9 | **Resolved.** Kueue preemption on the manager side suspends the Workload. MultiKueue then deletes the out-of-sync remote Workload. On re-admission, a new remote copy is created. Worker-side preemption is handled locally by the worker Kueue. | `workload.go` reconcileGroup flow |
+
+### Files Created (Session 4)
+
+- `internal/multikueue/config.go` -- MultiKueue configuration types,
+  constants for external-framework name and feature gates,
+  `ManagerClusterConfig` struct, `ValidateManagerConfig()` and
+  `ValidateExternalFrameworkList()` validation functions,
+  `RequiredFeatureGates()` helper.
+
+- `internal/multikueue/config_test.go` -- 18 tests:
+  - Valid config (1 test)
+  - Missing/empty external framework (2 tests)
+  - Feature gate disabled/missing (2 tests)
+  - No worker clusters (1 test)
+  - Multiple simultaneous errors (1 test)
+  - External framework list validation (4 tests)
+  - Required feature gates (1 test)
+  - Effective name defaults/custom (4 tests)
+  - ValidationError.Error() (1 test)
+  - Framework name consistency (1 test)
+
+- `internal/multikueue/framework.go` -- RTJ-specific MultiKueue framework
+  integration: `RTJGroupVersionKind`, `RTJGroupVersionResource`,
+  `FormatExternalFrameworkName()`, `IsRTJEligibleForMultiKueue()`,
+  `RTJManagerRBACRules()`, `RemoteObjectExpectations` documentation type.
+
+- `internal/multikueue/framework_test.go` -- 12 tests:
+  - FormatExternalFrameworkName (2 tests)
+  - GVK/GVR correctness (2 tests)
+  - IsRTJEligibleForMultiKueue nil/empty/wrong/valid (4 tests)
+  - Consistency with IsManagedByMultiKueue (1 subtest table)
+  - RTJManagerRBACRules (1 test)
+  - Label constants (1 test)
+  - Admission check controller consistency (1 test)
+
+- `deploy/multikueue/manager-config/kueue-controller-manager-config.yaml`
+  -- Kueue Configuration with RTJ external framework for manager cluster.
+
+- `deploy/multikueue/manager-config/admissioncheck.yaml` -- MultiKueue
+  AdmissionCheck resource.
+
+- `deploy/multikueue/manager-config/multikueueconfig.yaml` -- MultiKueueConfig
+  listing worker clusters.
+
+- `deploy/multikueue/manager-config/multikueuecluster-template.yaml` --
+  MultiKueueCluster templates (one per worker) with kubeconfig Secret refs.
+
+- `deploy/multikueue/manager-config/clusterqueue-multikueue.yaml` --
+  ClusterQueue with MultiKueue admission check.
+
+- `deploy/multikueue/manager-rbac/clusterrole-kueue-rtj.yaml` -- ClusterRole
+  for Kueue controller manager to manage RTJ on manager cluster.
+
+- `deploy/multikueue/manager-rbac/clusterrolebinding-kueue-rtj.yaml` --
+  ClusterRoleBinding for Kueue ServiceAccount.
+
+- `deploy/multikueue/manager-rbac/worker-kubeconfig-rbac.yaml` -- RBAC for
+  MultiKueue remote client on worker clusters.
+
+- `docs/phase6/multikueue-integration.md` -- Integration guide: manager
+  cluster setup (8 requirements), worker cluster setup (6 requirements),
+  why spec.managedBy matters, mirror-copy execution model, deploy artifact
+  reference, Kueue v0.15.1 version accuracy table.
+
+- `docs/phase6/adr/0003-rtj-as-external-framework.md` -- ADR with 8
+  decisions: generic adapter (D1), feature gates (D2), managedBy signal (D3),
+  full status copy (D4), no spec propagation (D5), automatic cleanup (D6),
+  KeepAdmissionCheckPending (D7), dual-cluster RBAC (D8). Three alternatives
+  considered and rejected.
+
+- `docs/phase6/index.md` -- updated with links to new docs.
+
+- `docs/phase6/session-handoff.md` -- this file (updated).
+
+### Tests Run
+
+- `go vet ./internal/multikueue/...` -- clean
+- `go test ./internal/multikueue/... -v` -- 30 tests pass (18 config + 12 framework)
+- `go test ./...` -- all packages pass:
+  - `api/v1alpha1` -- pass
+  - `internal/admissionchecks/resume` -- pass
+  - `internal/checkpoints` -- pass
+  - `internal/controller` -- pass
+  - `internal/jobset` -- pass
+  - `internal/kueue` -- pass
+  - `internal/multikueue` -- pass (NEW)
+  - `internal/policy/checkpointpriority` -- pass
+  - `internal/topology` -- pass
+  - `test/e2e` -- pass
+
+### Hard Boundary Verification
+
+| Boundary | Status |
+|---|---|
+| No custom MultiKueue dispatcher in the core milestone | Verified: uses Kueue's generic `externalframeworks.Adapter`. No `MultiKueueAdapter` implemented. |
+| RTJ is the only Kueue-managed object | Verified: external framework name matches `internal/kueue/register.go` |
+| Child JobSets remain plain runtime only | Verified: no changes to child JobSet creation. Manager suppression tested in Session 3. |
+| Single-cluster path preserved | Verified: all Phase 1-5 tests pass. No behavioral changes when MultiKueue not configured. |
+| Version-accurate to Kueue v0.15.1 | Verified: all adapter behavior, feature gates, and interface details confirmed from Kueue v0.15.1 source in Go module cache. |
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | MultiKueue external-framework protocol for custom CRDs | Blocks G1 | **Resolved:** Generic adapter handles external CRDs. Session 4. |
+| OQ-2 | Pause propagation via MultiKueue | Blocks G3 | **Resolved:** Spec mutations not propagated; pause via Kueue Workload suspension. Session 4. |
+| OQ-3 | Remote RTJ status visibility on the manager | Affects G4 | **Resolved:** Full `.status` copy via unstructured adapter. Session 4. |
+| OQ-4 | Manager-mode detection (all-or-nothing vs per-RTJ) | Affects G2 | **Resolved:** All-or-nothing `--mode` flag. Session 3. |
+| OQ-5 | Shared checkpoint store credential distribution | Affects G3/G5 | Tentatively resolved: operational concern |
+| OQ-6 | MultiKueueCluster kubeconfig management in kind | Affects G5 | Open -- requires kind networking investigation |
+| OQ-7 | Kueue MultiKueue feature gate status in v0.15.1 | Affects isolation strategy | **Resolved:** Both gates Beta, default-on. Session 4. |
+| OQ-8 | Remote RTJ cleanup on manager-side deletion | Affects lifecycle correctness | **Resolved:** Automatic via `RemoveRemoteObjects` + periodic GC. Session 4. |
+| OQ-9 | MultiKueue dispatch and Kueue preemption interaction | Affects preemption path | **Resolved:** Preemption suspends Workload, remote deleted and recreated. Session 4. |
+| OQ-10 | Phase 5 deferred items for Phase 6 | Minor worker-side improvements | Tentatively resolved: bundle with Phase 6 |
+
+### Divergence Notes
+
+No divergence from the mission statement. All hard boundaries are
+respected:
+- No custom MultiKueue dispatcher built (uses Kueue's generic adapter).
+- RTJ remains the only Kueue-managed object.
+- Child JobSets remain plain runtime only.
+- Single-cluster Phase 5 path preserved.
+- Version-accurate to pinned Kueue v0.15.1.
+- Full multi-cluster dev environment NOT added (deferred to G5).
+
+---
+
 ## Recommended Next Prompt
 
-The operator mode split is implemented. The recommended next session is:
+The MultiKueue external-framework integration is implemented. Six of ten
+open questions are now resolved. The recommended next session is:
 
-### Session 4: MultiKueue Protocol Investigation
+### Session 5: Manager-Side Status Mirroring Controller
 
-**Goal:** Resolve OQ-1, OQ-2, OQ-3 (remaining), OQ-7, OQ-8, and OQ-9
-by inspecting the Kueue v0.15.1 source code for MultiKueue's
-external-framework protocol.
+**Goal:** Implement the manager-side controller logic that consumes the
+status mirrored by Kueue's generic adapter and populates the
+`status.multiCluster` fields on the manager-side RTJ.
 
 **Prompt:**
 
@@ -371,27 +554,35 @@ You are working on Phase 6 only for the checkpoint-native preemption
 controller repo.
 
 Mission:
-Resolve the following open questions by inspecting the Kueue v0.15.1
-source code in the Go module cache.
+Implement manager-side status mirroring: when Kueue's generic adapter
+copies the remote worker RTJ's .status to the manager-side RTJ, the
+manager-mode controller should populate status.multiCluster fields
+(dispatchPhase, executionCluster, remotePhase, remoteCheckpoint, etc.).
 
 Hard boundaries:
-- Do not implement controller logic yet.
-- Do not modify Go source files.
-- Update only docs/phase6/open-questions.md and
-  docs/phase6/session-handoff.md with findings.
+- Do not build a custom MultiKueue dispatcher in the core milestone.
+- Keep RTJ as the only Kueue-managed object.
+- Keep child JobSets plain runtime only.
+- Preserve the single-cluster path.
 
 Process:
 - Read docs/phase6/session-handoff.md for current state.
-- Inspect the Kueue v0.15.1 source for MultiKueue implementation.
-- For each OQ, document: finding, evidence (file path + relevant code),
-  impact on Phase 6 design, recommended resolution.
+- Review internal/controller/resumabletrainingjob_controller.go for the
+  existing reconcileManagerIntent method.
+- Implement status mirroring logic in the manager branch.
+- Add tests.
+- Update docs/phase6/session-handoff.md.
 
-Questions:
-1. OQ-1: Does MultiKueue support dispatching custom external-framework
-   CRDs? What interfaces must the RTJ adapter implement?
-2. OQ-2: Does MultiKueue propagate spec mutations to remote objects?
-3. OQ-3: How exactly does MultiKueue mirror remote status to the manager?
-4. OQ-7: What is MultiKueue's feature gate status in Kueue v0.15.1?
-5. OQ-8: Does MultiKueue clean up remote objects on manager-side deletion?
-6. OQ-9: How does Kueue preemption interact with MultiKueue dispatch?
+Requirements:
+- Detect when the generic adapter has mirrored remote status to the
+  local RTJ (the adapter patches .status, so the controller sees it
+  on the next reconcile).
+- Populate status.multiCluster.dispatchPhase based on presence of
+  remote status data.
+- Populate status.multiCluster.remotePhase from the mirrored phase.
+- Populate status.multiCluster.remoteCheckpoint from the mirrored
+  lastCompletedCheckpoint.
+- Populate status.multiCluster.executionCluster from the Workload's
+  admission check status (clusterName field).
+- Preserve backward compatibility: all Phase 1-5 tests must pass.
 ```
