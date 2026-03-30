@@ -142,6 +142,64 @@ func (in *JobSetTemplate) DeepCopy() *JobSetTemplate {
 	return out
 }
 
+func (in *MultiClusterStatus) DeepCopyInto(out *MultiClusterStatus) {
+	*out = *in
+	if in.NominatedClusters != nil {
+		in, out := &in.NominatedClusters, &out.NominatedClusters
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.RemoteObjectRef != nil {
+		in, out := &in.RemoteObjectRef, &out.RemoteObjectRef
+		*out = new(RemoteObjectReference)
+		**out = **in
+	}
+	if in.RemoteCheckpoint != nil {
+		in, out := &in.RemoteCheckpoint, &out.RemoteCheckpoint
+		*out = new(RemoteCheckpointSummary)
+		(*in).DeepCopyInto(*out)
+	}
+}
+
+func (in *MultiClusterStatus) DeepCopy() *MultiClusterStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(MultiClusterStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *RemoteObjectReference) DeepCopyInto(out *RemoteObjectReference) {
+	*out = *in
+}
+
+func (in *RemoteObjectReference) DeepCopy() *RemoteObjectReference {
+	if in == nil {
+		return nil
+	}
+	out := new(RemoteObjectReference)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *RemoteCheckpointSummary) DeepCopyInto(out *RemoteCheckpointSummary) {
+	*out = *in
+	if in.LastCompletedCheckpointTime != nil {
+		in, out := &in.LastCompletedCheckpointTime, &out.LastCompletedCheckpointTime
+		*out = (*in).DeepCopy()
+	}
+}
+
+func (in *RemoteCheckpointSummary) DeepCopy() *RemoteCheckpointSummary {
+	if in == nil {
+		return nil
+	}
+	out := new(RemoteCheckpointSummary)
+	in.DeepCopyInto(out)
+	return out
+}
+
 func (in *LaunchReadinessStatus) DeepCopyInto(out *LaunchReadinessStatus) {
 	*out = *in
 	if in.LastTransitionTime != nil {
@@ -488,6 +546,11 @@ func (in *ResumableTrainingJobStatus) DeepCopyInto(out *ResumableTrainingJobStat
 	if in.PriorityShaping != nil {
 		in, out := &in.PriorityShaping, &out.PriorityShaping
 		*out = new(PriorityShapingStatus)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.MultiCluster != nil {
+		in, out := &in.MultiCluster, &out.MultiCluster
+		*out = new(MultiClusterStatus)
 		(*in).DeepCopyInto(*out)
 	}
 }

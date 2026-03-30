@@ -218,6 +218,16 @@ spec:
                         domain as workers. Only meaningful when mode is
                         Required, Preferred, or Unconstrained.
                       type: boolean
+                # Phase 6: managedBy
+                managedBy:
+                  description: >-
+                    Identifies the external controller responsible for this RTJ's
+                    Workload lifecycle. When set to "kueue.x-k8s.io/multikueue",
+                    the RTJ is eligible for MultiKueue dispatch. When empty or
+                    absent, single-cluster Phase 5 behavior is preserved.
+                    Immutable once set.
+                  type: string
+                  maxLength: 256
                 # Phase 5: priority policy ref
                 priorityPolicyRef:
                   description: >-
@@ -582,3 +592,80 @@ spec:
                     appliedPolicyRef:
                       description: Name of the CheckpointPriorityPolicy last used to compute effective priority.
                       type: string
+                # Phase 6: multi-cluster status
+                multiCluster:
+                  description: >-
+                    Manager-side view of multi-cluster dispatch. Populated only
+                    when spec.managedBy is set to the MultiKueue controller value.
+                    All fields are controller-owned.
+                  type: object
+                  properties:
+                    dispatchPhase:
+                      description: High-level multi-cluster dispatch state.
+                      type: string
+                      enum:
+                        - Pending
+                        - Dispatched
+                        - Active
+                    nominatedClusters:
+                      description: Worker clusters considered by MultiKueue for dispatch.
+                      type: array
+                      items:
+                        type: string
+                    executionCluster:
+                      description: Worker cluster where the RTJ is currently dispatched.
+                      type: string
+                    remoteObjectRef:
+                      description: Reference to the remote RTJ copy on the worker cluster.
+                      type: object
+                      required:
+                        - cluster
+                        - name
+                      properties:
+                        cluster:
+                          type: string
+                          minLength: 1
+                        namespace:
+                          type: string
+                        name:
+                          type: string
+                          minLength: 1
+                        uid:
+                          type: string
+                    remotePhase:
+                      description: Phase observed on the remote worker-side RTJ.
+                      type: string
+                      enum:
+                        - Pending
+                        - Queued
+                        - Admitted
+                        - Starting
+                        - Running
+                        - YieldRequested
+                        - Draining
+                        - Paused
+                        - Restoring
+                        - Succeeded
+                        - Failed
+                    remoteCheckpoint:
+                      description: Latest completed checkpoint from the remote worker.
+                      type: object
+                      properties:
+                        lastCompletedCheckpointID:
+                          type: string
+                        lastCompletedCheckpointTime:
+                          type: string
+                          format: date-time
+                        storageURI:
+                          type: string
+                    remoteObservedGeneration:
+                      description: >-
+                        metadata.generation of the remote worker-side RTJ as of
+                        the last status mirror. Sync marker for spec propagation.
+                      type: integer
+                      format: int64
+                    localExecutionSuppressed:
+                      description: >-
+                        Indicates manager-mode controller has suppressed local
+                        child JobSet creation for this MultiKueue-managed RTJ.
+                      type: boolean

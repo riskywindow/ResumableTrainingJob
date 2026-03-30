@@ -568,6 +568,198 @@ func TestDeepCopyRTJWithPhase5Fields(t *testing.T) {
 	}
 }
 
+// --- Phase 6 backward-compatibility and deep copy tests ---
+
+func TestPhase5SpecDecodesWithoutManagedBy(t *testing.T) {
+	job := minimalValidRTJ()
+	job.Default()
+
+	// Phase 5 spec has no managedBy.
+	if job.Spec.ManagedBy != "" {
+		t.Fatalf("expected empty managedBy for Phase 5 spec")
+	}
+	if err := job.ValidateCreate(); err != nil {
+		t.Fatalf("expected Phase 5 spec to pass validation, got %v", err)
+	}
+}
+
+func TestPhase5StatusDecodesWithoutMultiCluster(t *testing.T) {
+	job := minimalValidRTJ()
+	job.Default()
+	now := metav1.Now()
+	job.InitializePhase1Status(metav1.NewTime(now.Time))
+
+	// Phase 5 status has no multiCluster section.
+	if job.Status.MultiCluster != nil {
+		t.Fatalf("expected nil multiCluster for Phase 5 status")
+	}
+}
+
+func TestDeepCopyMultiClusterStatus(t *testing.T) {
+	now := metav1.Now()
+	orig := &MultiClusterStatus{
+		DispatchPhase:     DispatchPhaseActive,
+		NominatedClusters: []string{"worker-1", "worker-2"},
+		ExecutionCluster:  "worker-1",
+		RemoteObjectRef: &RemoteObjectReference{
+			Cluster:   "worker-1",
+			Namespace: "default",
+			Name:      "example",
+			UID:       "abc-123",
+		},
+		RemotePhase: PhaseRunning,
+		RemoteCheckpoint: &RemoteCheckpointSummary{
+			LastCompletedCheckpointID:   "ckpt-7",
+			LastCompletedCheckpointTime: &now,
+			StorageURI:                  "s3://checkpoints/example/ckpt-7",
+		},
+		RemoteObservedGeneration: 5,
+		LocalExecutionSuppressed: true,
+	}
+
+	cp := orig.DeepCopy()
+
+	if cp.DispatchPhase != DispatchPhaseActive {
+		t.Fatalf("expected dispatchPhase Active, got %s", cp.DispatchPhase)
+	}
+	if len(cp.NominatedClusters) != 2 || cp.NominatedClusters[0] != "worker-1" {
+		t.Fatalf("expected nominatedClusters [worker-1, worker-2], got %v", cp.NominatedClusters)
+	}
+	if cp.ExecutionCluster != "worker-1" {
+		t.Fatalf("expected executionCluster worker-1, got %s", cp.ExecutionCluster)
+	}
+	if cp.RemoteObjectRef == nil || cp.RemoteObjectRef.Cluster != "worker-1" {
+		t.Fatalf("expected remoteObjectRef with cluster worker-1")
+	}
+	if cp.RemotePhase != PhaseRunning {
+		t.Fatalf("expected remotePhase Running, got %s", cp.RemotePhase)
+	}
+	if cp.RemoteCheckpoint == nil || cp.RemoteCheckpoint.LastCompletedCheckpointID != "ckpt-7" {
+		t.Fatalf("expected remoteCheckpoint with ID ckpt-7")
+	}
+	if cp.RemoteObservedGeneration != 5 {
+		t.Fatalf("expected remoteObservedGeneration 5, got %d", cp.RemoteObservedGeneration)
+	}
+	if !cp.LocalExecutionSuppressed {
+		t.Fatalf("expected localExecutionSuppressed true")
+	}
+
+	// Verify independence: mutate copy.
+	cp.NominatedClusters[0] = "worker-3"
+	if orig.NominatedClusters[0] != "worker-1" {
+		t.Fatalf("mutating copy affected original nominatedClusters")
+	}
+	cp.RemoteObjectRef.Cluster = "worker-3"
+	if orig.RemoteObjectRef.Cluster != "worker-1" {
+		t.Fatalf("mutating copy affected original remoteObjectRef")
+	}
+	cp.RemoteCheckpoint.LastCompletedCheckpointID = "ckpt-99"
+	if orig.RemoteCheckpoint.LastCompletedCheckpointID != "ckpt-7" {
+		t.Fatalf("mutating copy affected original remoteCheckpoint")
+	}
+}
+
+func TestDeepCopyRTJWithPhase6Fields(t *testing.T) {
+	now := metav1.Now()
+	job := minimalValidRTJ()
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{Name: "default-shaping"}
+	job.Status.MultiCluster = &MultiClusterStatus{
+		DispatchPhase:    DispatchPhaseActive,
+		ExecutionCluster: "worker-1",
+		RemotePhase:      PhaseRunning,
+		RemoteCheckpoint: &RemoteCheckpointSummary{
+			LastCompletedCheckpointID:   "ckpt-5",
+			LastCompletedCheckpointTime: &now,
+			StorageURI:                  "s3://checkpoints/example/ckpt-5",
+		},
+		LocalExecutionSuppressed: true,
+	}
+
+	cp := job.DeepCopy()
+
+	if cp.Spec.ManagedBy != MultiKueueControllerName {
+		t.Fatalf("expected managedBy to be preserved in deep copy")
+	}
+	if cp.Status.MultiCluster == nil {
+		t.Fatalf("expected multiCluster status to be preserved in deep copy")
+	}
+	if cp.Status.MultiCluster.ExecutionCluster != "worker-1" {
+		t.Fatalf("expected executionCluster worker-1, got %s", cp.Status.MultiCluster.ExecutionCluster)
+	}
+	if cp.Status.MultiCluster.RemoteCheckpoint == nil || cp.Status.MultiCluster.RemoteCheckpoint.LastCompletedCheckpointID != "ckpt-5" {
+		t.Fatalf("expected remoteCheckpoint preserved in deep copy")
+	}
+
+	// Verify independence.
+	cp.Spec.ManagedBy = "other.io/controller"
+	if job.Spec.ManagedBy != MultiKueueControllerName {
+		t.Fatalf("deep copy not independent for managedBy")
+	}
+	cp.Status.MultiCluster.ExecutionCluster = "worker-2"
+	if job.Status.MultiCluster.ExecutionCluster != "worker-1" {
+		t.Fatalf("deep copy not independent for multiCluster")
+	}
+}
+
+func TestValidateManagedByRejectsInvalidFormat(t *testing.T) {
+	testCases := []struct {
+		name        string
+		managedBy   string
+		wantMessage string
+	}{
+		{
+			name:        "no slash",
+			managedBy:   "invalid-no-slash",
+			wantMessage: "managedBy",
+		},
+		{
+			name:        "too long",
+			managedBy:   strings.Repeat("a", 200) + "/" + strings.Repeat("b", 100),
+			wantMessage: "managedBy",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			job := minimalValidRTJ()
+			job.Default()
+			job.Spec.ManagedBy = tc.managedBy
+
+			err := job.ValidateCreate()
+			if err == nil {
+				t.Fatalf("expected create validation to fail")
+			}
+			if !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("expected error to mention %q, got %v", tc.wantMessage, err)
+			}
+		})
+	}
+}
+
+func TestValidateManagedByAcceptsValidValues(t *testing.T) {
+	testCases := []struct {
+		name      string
+		managedBy string
+	}{
+		{name: "empty (Phase 5 compat)", managedBy: ""},
+		{name: "multikueue", managedBy: MultiKueueControllerName},
+		{name: "custom controller", managedBy: "custom.example.com/my-controller"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			job := minimalValidRTJ()
+			job.Default()
+			job.Spec.ManagedBy = tc.managedBy
+
+			if err := job.ValidateCreate(); err != nil {
+				t.Fatalf("expected validation to succeed, got %v", err)
+			}
+		})
+	}
+}
+
 func minimalValidRTJ() *ResumableTrainingJob {
 	return &ResumableTrainingJob{
 		ObjectMeta: metav1.ObjectMeta{
