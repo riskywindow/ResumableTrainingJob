@@ -35,6 +35,12 @@ Build on Phase 4's topology-aware admission pipeline to:
 
 - [dev-environment.md](dev-environment.md) - local dev profile, assumptions, quota design, why cohort/fair-sharing is excluded
 
+### Observability and Operations
+
+- [demo.md](demo.md) - step-by-step demo walkthrough for checkpoint-aware preemption lifecycle
+- [operations.md](operations.md) - how to inspect RTJ priority, Workload state, checkpoint freshness, and policies
+- [troubleshooting.md](troubleshooting.md) - diagnosing priority update failures, clobbering, protection window issues, timing problems
+
 ### E2E Testing
 
 - [e2e.md](e2e.md) - Phase 5 e2e test coverage, what each test proves, what remains deferred
@@ -42,6 +48,12 @@ Build on Phase 4's topology-aware admission pipeline to:
 ### Migration
 
 - [migration-from-phase4.md](migration-from-phase4.md) - what stays, what changes, why effective priority is derived, why cohort/fair-sharing is deferred
+
+### Review and Signoff
+
+- [PHASE5_SIGNOFF.md](PHASE5_SIGNOFF.md) - final signoff summary: capabilities, deferred items, risks, Phase 6 next steps
+- [review/consistency-audit.md](review/consistency-audit.md) - implementation vs contract audit across all 12 areas
+- [review/gaps.md](review/gaps.md) - gaps analysis with classification and recommendations
 
 ### Tracking
 

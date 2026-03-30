@@ -28,6 +28,9 @@ PHASE5_TRAINER_IMAGE ?= $(PHASE4_TRAINER_IMAGE)
 .PHONY: phase4-inspect-workload phase4-inspect-admissioncheck phase4-inspect-topology phase4-inspect-checkpoints
 .PHONY: e2e-phase4
 .PHONY: phase5-up phase5-down phase5-status phase5-load-images phase5-smoke phase5-profile
+.PHONY: phase5-submit-low phase5-submit-high
+.PHONY: phase5-inspect-priority phase5-inspect-policy phase5-inspect-workload phase5-inspect-checkpoints
+.PHONY: e2e-phase5
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -333,3 +336,35 @@ phase5-profile:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
 	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
 	  ./hack/dev/phase5-profile.sh
+
+# ── Phase 5 demo / inspect targets ─────────────────────────────────
+#
+# phase5-submit-low:           Submit a low-priority RTJ with priority shaping.
+# phase5-submit-high:          Submit a high-priority RTJ with priority shaping.
+# phase5-inspect-priority:     Inspect base vs effective priority, preemption state,
+#                               protection window, checkpoint freshness, yield budget.
+# phase5-inspect-policy:       Inspect the CheckpointPriorityPolicy attached to an RTJ.
+# phase5-inspect-workload:     Inspect RTJ + Workload status with priority shaping.
+# phase5-inspect-checkpoints:  Inspect checkpoint freshness evidence for priority shaping.
+# e2e-phase5:                  Run Phase 5 e2e tests.
+
+phase5-submit-low:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE5_LOW_RTJ_NAME=$(PHASE5_LOW_RTJ_NAME) PHASE5_TRAINER_IMAGE=$(PHASE5_TRAINER_IMAGE) ./hack/dev/submit-low-priority-phase5.sh
+
+phase5-submit-high:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE5_HIGH_RTJ_NAME=$(PHASE5_HIGH_RTJ_NAME) PHASE5_TRAINER_IMAGE=$(PHASE5_TRAINER_IMAGE) ./hack/dev/submit-high-priority-phase5.sh
+
+phase5-inspect-priority:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE5_RTJ_NAME=$(PHASE5_LOW_RTJ_NAME) ./hack/dev/inspect-priority.sh
+
+phase5-inspect-policy:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE5_RTJ_NAME=$(PHASE5_LOW_RTJ_NAME) ./hack/dev/inspect-policy.sh
+
+phase5-inspect-workload:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE5_RTJ_NAME=$(PHASE5_LOW_RTJ_NAME) ./hack/dev/inspect-workload-phase5.sh
+
+phase5-inspect-checkpoints:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE5_RTJ_NAME=$(PHASE5_LOW_RTJ_NAME) ./hack/dev/inspect-checkpoints-phase5.sh
+
+e2e-phase5:
+	RUN_KIND_E2E=1 PHASE5_TRAINER_IMAGE=$(PHASE5_TRAINER_IMAGE) go test ./test/e2e -run 'TestProtectedPriority|TestPriorityDrop|TestYieldBudget' -v -timeout 20m
