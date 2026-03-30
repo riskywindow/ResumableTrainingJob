@@ -21,6 +21,7 @@ import (
 	"github.com/example/checkpoint-native-preemption-controller/internal/checkpoints"
 	rtjjobset "github.com/example/checkpoint-native-preemption-controller/internal/jobset"
 	operatormetrics "github.com/example/checkpoint-native-preemption-controller/internal/metrics"
+	"github.com/example/checkpoint-native-preemption-controller/internal/remote"
 )
 
 const (
@@ -40,6 +41,11 @@ type ResumableTrainingJobReconciler struct {
 	// ModeWorker (default) runs the full Phase 5 runtime path.
 	// ModeManager suppresses local runtime for MultiKueue-managed RTJs.
 	Mode OperatorMode
+
+	// ClusterResolver resolves the execution cluster for MultiKueue-
+	// dispatched RTJs. Only used when Mode is ModeManager. Nil is safe
+	// (execution cluster will be reported as unknown).
+	ClusterResolver remote.ClusterResolver
 }
 
 // +kubebuilder:rbac:groups=training.checkpoint.example.io,resources=resumabletrainingjobs,verbs=get;list;watch;update;patch
@@ -291,6 +297,10 @@ func (r *ResumableTrainingJobReconciler) failLaunch(
 // local runtime execution is suppressed and reconciles the manager-side intent
 // (desired state). It does NOT create child JobSets, control ConfigMaps, or
 // perform any checkpoint I/O.
+//
+// Phase 6 Session 5: the manager now detects when the Kueue generic adapter
+// has mirrored remote status and populates MultiClusterStatus with the
+// execution cluster, remote phase, and remote checkpoint summary.
 func (r *ResumableTrainingJobReconciler) reconcileManagerIntent(
 	ctx context.Context,
 	job *trainingv1alpha1.ResumableTrainingJob,
@@ -298,16 +308,44 @@ func (r *ResumableTrainingJobReconciler) reconcileManagerIntent(
 	logger := log.FromContext(ctx)
 	now := r.now()
 
-	changed := markManagerSuppressed(job, now)
+	// Resolve the execution cluster from the Workload admission check.
+	executionCluster := ""
+	if r.ClusterResolver != nil {
+		var err error
+		executionCluster, err = r.ClusterResolver.ResolveExecutionCluster(ctx, job)
+		if err != nil {
+			logger.Error(err, "failed to resolve execution cluster; continuing with unknown")
+		}
+	}
+
+	// Sync remote status: detect mirrored status from the adapter and
+	// populate MultiClusterStatus fields.
+	changed := syncRemoteStatus(job, executionCluster, now)
+
+	// When no remote status has been mirrored yet, set the manager-side
+	// phase to Queued to indicate we are waiting for dispatch. This
+	// preserves the behavior from markManagerSuppressed.
+	if !hasRemoteStatusSignal(job) {
+		changed = markManagerSuppressed(job, now) || changed
+	}
+
+	if job.Status.ObservedGeneration != job.Generation {
+		job.Status.ObservedGeneration = job.Generation
+		changed = true
+	}
+
 	if changed {
 		if err := r.Status().Update(ctx, job); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 
-	logger.Info("manager mode: local runtime suppressed for MultiKueue-managed RTJ",
-		"dispatchPhase", job.Status.MultiCluster.DispatchPhase,
-		"localExecutionSuppressed", job.Status.MultiCluster.LocalExecutionSuppressed,
+	mc := job.Status.MultiCluster
+	logger.Info("manager mode: reconciled remote status",
+		"dispatchPhase", mc.DispatchPhase,
+		"executionCluster", mc.ExecutionCluster,
+		"remotePhase", mc.RemotePhase,
+		"localExecutionSuppressed", mc.LocalExecutionSuppressed,
 	)
 	return ctrl.Result{}, nil
 }
