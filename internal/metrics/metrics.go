@@ -244,6 +244,75 @@ var (
 		},
 	)
 
+	// Phase 5 extended metrics.
+	rtjsByPreemptionState = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "rtjs_by_preemption_state",
+			Help:      "Current ResumableTrainingJobs tracked by preemption state (Protected, Active, Cooldown, Preemptible).",
+		},
+		[]string{"state"},
+	)
+	priorityBasePriority = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "priority_base_value",
+			Help:      "Current base priority value per RTJ (from WorkloadPriorityClass).",
+		},
+		[]string{"rtj"},
+	)
+	priorityDecisionsByStateReason = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "priority_decisions_total",
+			Help:      "Total priority decisions by decision state and reason.",
+		},
+		[]string{"state", "reason"},
+	)
+	priorityMaterializationUpdates = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "priority_materialization_updates_total",
+			Help:      "Total times effective priority was written to a Kueue Workload.",
+		},
+	)
+	protectedWorkloadsCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "protected_workloads",
+			Help:      "Number of RTJs currently in Protected preemption state.",
+		},
+	)
+	preemptibleWorkloadsCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "preemptible_workloads",
+			Help:      "Number of RTJs currently in Preemptible preemption state.",
+		},
+	)
+	yieldsBlockedByBudget = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "yields_blocked_by_budget_total",
+			Help:      "Total times a yield was prevented by yield budget exhaustion.",
+		},
+	)
+	yieldsBlockedByCooldown = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "yields_blocked_by_cooldown_total",
+			Help:      "Total times priority demotion was prevented by the cooldown period.",
+		},
+	)
+
 	// Phase 3 metrics.
 	admissionComparisons = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -335,6 +404,14 @@ func NewRecorder() *Recorder {
 			priorityEffectiveValue,
 			priorityTelemetryFailures,
 			priorityDrivenPreemptions,
+			rtjsByPreemptionState,
+			priorityBasePriority,
+			priorityDecisionsByStateReason,
+			priorityMaterializationUpdates,
+			protectedWorkloadsCount,
+			preemptibleWorkloadsCount,
+			yieldsBlockedByBudget,
+			yieldsBlockedByCooldown,
 			// Phase 4
 			launchesBlockedByReadinessGate,
 			readinessGateOutcomes,
@@ -631,5 +708,84 @@ func (r *Recorder) IncPriorityTelemetryFailure() {
 func (r *Recorder) IncPriorityDrivenPreemption() {
 	if r != nil {
 		priorityDrivenPreemptions.Inc()
+	}
+}
+
+// ObservePreemptionState updates the per-RTJ preemption state gauge.
+// The previous state is decremented and the new state is incremented.
+func (r *Recorder) ObservePreemptionState(rtjKey, previousState, newState string) {
+	if r == nil {
+		return
+	}
+	if previousState != "" && previousState != newState {
+		rtjsByPreemptionState.WithLabelValues(previousState).Dec()
+	}
+	if newState != "" {
+		if previousState != newState {
+			rtjsByPreemptionState.WithLabelValues(newState).Inc()
+		}
+	}
+}
+
+// RemovePreemptionState cleans up the preemption state gauge for a removed RTJ.
+func (r *Recorder) RemovePreemptionState(state string) {
+	if r != nil && state != "" {
+		rtjsByPreemptionState.WithLabelValues(state).Dec()
+	}
+}
+
+// SetPriorityBasePriority records the base priority for a specific RTJ.
+func (r *Recorder) SetPriorityBasePriority(rtjKey string, value float64) {
+	if r != nil && rtjKey != "" {
+		priorityBasePriority.WithLabelValues(rtjKey).Set(value)
+	}
+}
+
+// RemovePriorityBasePriority removes the base priority metric for an RTJ.
+func (r *Recorder) RemovePriorityBasePriority(rtjKey string) {
+	if r != nil && rtjKey != "" {
+		priorityBasePriority.DeleteLabelValues(rtjKey)
+	}
+}
+
+// ObservePriorityDecision records a priority decision by state and reason.
+func (r *Recorder) ObservePriorityDecision(state, reason string) {
+	if r != nil && state != "" && reason != "" {
+		priorityDecisionsByStateReason.WithLabelValues(state, reason).Inc()
+	}
+}
+
+// IncPriorityMaterializationUpdate records a Workload priority patch.
+func (r *Recorder) IncPriorityMaterializationUpdate() {
+	if r != nil {
+		priorityMaterializationUpdates.Inc()
+	}
+}
+
+// SetProtectedWorkloadsCount sets the gauge for protected workloads.
+func (r *Recorder) SetProtectedWorkloadsCount(count float64) {
+	if r != nil {
+		protectedWorkloadsCount.Set(count)
+	}
+}
+
+// SetPreemptibleWorkloadsCount sets the gauge for preemptible workloads.
+func (r *Recorder) SetPreemptibleWorkloadsCount(count float64) {
+	if r != nil {
+		preemptibleWorkloadsCount.Set(count)
+	}
+}
+
+// IncYieldBlockedByBudget records a yield blocked by budget exhaustion.
+func (r *Recorder) IncYieldBlockedByBudget() {
+	if r != nil {
+		yieldsBlockedByBudget.Inc()
+	}
+}
+
+// IncYieldBlockedByCooldown records a priority demotion prevented by cooldown.
+func (r *Recorder) IncYieldBlockedByCooldown() {
+	if r != nil {
+		yieldsBlockedByCooldown.Inc()
 	}
 }

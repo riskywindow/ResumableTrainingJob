@@ -121,6 +121,7 @@ func main() {
 		"externalFrameworks", kueueintegration.ExternalFrameworks(),
 		"phase3Metrics", true,
 		"phase4Metrics", true,
+		"phase5Metrics", true,
 		"resumeReadinessControllerName", resumeac.ControllerName,
 	)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
