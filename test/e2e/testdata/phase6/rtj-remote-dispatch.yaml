@@ -1,0 +1,106 @@
+# Phase 6 e2e template: RTJ for MultiKueue remote dispatch.
+#
+# Submitted to the manager cluster. MultiKueue dispatches to a worker
+# cluster which runs the full Phase 5 reconciliation path.
+#
+# The RTJ does not include workloadPriorityClassName because no
+# WorkloadPriorityClass is created in the Phase 6 dev environment.
+# Kueue creates the Workload with priority 0 (the default when no
+# WPC is referenced). This avoids a Kueue webhook rejection for a
+# non-existent WPC.
+#
+# Credentials are distributed via secretKeyRef (resolved by
+# install-phase6-shared-store.sh at install time).
+#
+# Placeholders:
+#   __RTJ_NAME__      -> unique RTJ name
+#   __DEV_NAMESPACE__ -> target namespace (default: checkpoint-dev)
+#   __TRAINER_IMAGE__ -> trainer container image
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase6-training
+spec:
+  managedBy: kueue.x-k8s.io/multikueue
+  suspend: true
+  queueName: phase6-training
+  workloadPriorityClassName: phase6-default
+  control:
+    desiredState: Running
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: cpu-only
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: AWS_ACCESS_KEY_ID
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_ACCESS_KEY_ID
+                          - name: AWS_SECRET_ACCESS_KEY
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_SECRET_ACCESS_KEY
+                          - name: AWS_ENDPOINT_URL
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_ENDPOINT_URL
+                          - name: AWS_DEFAULT_REGION
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_REGION
+                          - name: SLEEP_PER_STEP
+                            value: "5"
+                          - name: CHECKPOINT_EVERY
+                            value: "3"
+                          - name: TOTAL_STEPS
+                            value: "100"
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3
