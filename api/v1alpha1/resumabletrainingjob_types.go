@@ -24,6 +24,14 @@ const (
 	DefaultAllowWorldSizeChange     = false
 	DefaultEnablePartialAdmission   = false
 	DefaultTopologyMode             = TopologyModeDisabled
+
+	// MultiKueueControllerName is the well-known managedBy value for Kueue MultiKueue.
+	// When spec.managedBy is set to this value, the RTJ is eligible for MultiKueue
+	// dispatch to a remote worker cluster.
+	MultiKueueControllerName = "kueue.x-k8s.io/multikueue"
+
+	// MaxManagedByLength is the maximum allowed length for the managedBy field.
+	MaxManagedByLength = 256
 )
 
 const (
@@ -140,6 +148,24 @@ const (
 	ReadinessGateRejected ReadinessGateState = "Rejected"
 )
 
+// MultiClusterDispatchPhase describes the high-level multi-cluster dispatch lifecycle.
+// +kubebuilder:validation:Enum=Pending;Dispatched;Active
+type MultiClusterDispatchPhase string
+
+const (
+	// DispatchPhasePending means the RTJ is waiting for MultiKueue to dispatch
+	// it to a worker cluster.
+	DispatchPhasePending MultiClusterDispatchPhase = "Pending"
+
+	// DispatchPhaseDispatched means MultiKueue has created a remote copy on a
+	// worker cluster. The worker may not have started processing yet.
+	DispatchPhaseDispatched MultiClusterDispatchPhase = "Dispatched"
+
+	// DispatchPhaseActive means the worker cluster has acknowledged the RTJ and
+	// is actively managing it (the remote phase is populated).
+	DispatchPhaseActive MultiClusterDispatchPhase = "Active"
+)
+
 // TopologySpec declares topology placement requirements for the training job.
 // When set with a mode other than Disabled, the operator includes TopologyRequest
 // on Workload PodSets, enabling Kueue's TopologyAwareScheduling.
@@ -212,6 +238,15 @@ type ResumableTrainingJobSpec struct {
 	// its lifetime (Phase 4 behavior preserved).
 	// +optional
 	PriorityPolicyRef *PriorityPolicyReference `json:"priorityPolicyRef,omitempty"`
+
+	// ManagedBy identifies the external controller responsible for this RTJ's
+	// Workload lifecycle. When set to "kueue.x-k8s.io/multikueue", the RTJ
+	// is eligible for MultiKueue dispatch to a remote worker cluster.
+	// When empty or absent, the RTJ follows the single-cluster Phase 5 path.
+	// This field is user-authored and immutable once set.
+	// +optional
+	// +kubebuilder:validation:MaxLength=256
+	ManagedBy string `json:"managedBy,omitempty"`
 
 	// Control carries the declarative manual pause or resume intent.
 	Control *ControlSpec `json:"control,omitempty"`
@@ -404,6 +439,13 @@ type ResumableTrainingJobStatus struct {
 	// shaping controller has not yet evaluated this RTJ.
 	// +optional
 	PriorityShaping *PriorityShapingStatus `json:"priorityShaping,omitempty"`
+
+	// MultiCluster captures the manager-side view of multi-cluster dispatch.
+	// Populated only when the RTJ is managed by MultiKueue (spec.managedBy is
+	// set to the MultiKueue controller value). Nil in single-cluster mode.
+	// All fields are controller-owned; users must not write to this section.
+	// +optional
+	MultiCluster *MultiClusterStatus `json:"multiCluster,omitempty"`
 }
 
 // AdmissionStatus captures the admitted shape from Kueue.
@@ -515,6 +557,93 @@ type EffectiveLaunchShape struct {
 	// Empty on first launch (no checkpoint to restore).
 	// +optional
 	SelectedCheckpointID string `json:"selectedCheckpointID,omitempty"`
+}
+
+// MultiClusterStatus captures the manager-side view of multi-cluster dispatch.
+// All fields are controller-owned and populated by the manager-mode reconciler
+// based on information mirrored from the remote worker-side RTJ via MultiKueue.
+type MultiClusterStatus struct {
+	// DispatchPhase is the high-level multi-cluster dispatch state.
+	// +optional
+	DispatchPhase MultiClusterDispatchPhase `json:"dispatchPhase,omitempty"`
+
+	// NominatedClusters lists the worker clusters that MultiKueue considered
+	// or is considering for dispatching this RTJ.
+	// +optional
+	NominatedClusters []string `json:"nominatedClusters,omitempty"`
+
+	// ExecutionCluster is the worker cluster where the RTJ is currently
+	// dispatched and executing. Empty when not yet dispatched.
+	// +optional
+	ExecutionCluster string `json:"executionCluster,omitempty"`
+
+	// RemoteObjectRef points to the remote RTJ copy on the worker cluster.
+	// Nil before dispatch.
+	// +optional
+	RemoteObjectRef *RemoteObjectReference `json:"remoteObjectRef,omitempty"`
+
+	// RemotePhase is the phase observed on the remote worker-side RTJ.
+	// Mirrors the worker's .status.phase. Empty before the worker has
+	// initialized status.
+	// +optional
+	RemotePhase ResumableTrainingJobPhase `json:"remotePhase,omitempty"`
+
+	// RemoteCheckpoint summarizes the latest completed checkpoint reported
+	// by the remote worker. Nil before any checkpoint completes on the worker.
+	// +optional
+	RemoteCheckpoint *RemoteCheckpointSummary `json:"remoteCheckpoint,omitempty"`
+
+	// RemoteObservedGeneration is the metadata.generation of the remote
+	// worker-side RTJ as of the last status mirror. Used as a sync marker
+	// to detect when the remote has observed a spec change.
+	// +optional
+	RemoteObservedGeneration int64 `json:"remoteObservedGeneration,omitempty"`
+
+	// LocalExecutionSuppressed indicates that manager-mode controller has
+	// suppressed local child JobSet creation because this RTJ is managed
+	// by MultiKueue. Always true when spec.managedBy is set to the
+	// MultiKueue value and the operator is running in manager mode.
+	// +optional
+	LocalExecutionSuppressed bool `json:"localExecutionSuppressed,omitempty"`
+}
+
+// RemoteObjectReference identifies the remote RTJ copy on a worker cluster.
+type RemoteObjectReference struct {
+	// Cluster is the name of the worker cluster hosting the remote copy.
+	// +kubebuilder:validation:MinLength=1
+	Cluster string `json:"cluster"`
+
+	// Namespace is the namespace of the remote RTJ on the worker cluster.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// Name is the name of the remote RTJ on the worker cluster.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// UID is the UID of the remote RTJ on the worker cluster.
+	// +optional
+	UID string `json:"uid,omitempty"`
+}
+
+// RemoteCheckpointSummary summarizes the latest checkpoint from a remote worker.
+// This is a lightweight mirror of the worker's .status.lastCompletedCheckpoint
+// to avoid embedding the full CheckpointReference on the manager.
+type RemoteCheckpointSummary struct {
+	// LastCompletedCheckpointID is the checkpoint ID from the worker's
+	// .status.lastCompletedCheckpoint.id.
+	// +optional
+	LastCompletedCheckpointID string `json:"lastCompletedCheckpointID,omitempty"`
+
+	// LastCompletedCheckpointTime is the completion timestamp from the worker's
+	// .status.lastCompletedCheckpoint.completionTime.
+	// +optional
+	LastCompletedCheckpointTime *metav1.Time `json:"lastCompletedCheckpointTime,omitempty"`
+
+	// StorageURI is the storage URI of the checkpoint from the worker's
+	// .status.lastCompletedCheckpoint.storageURI.
+	// +optional
+	StorageURI string `json:"storageURI,omitempty"`
 }
 
 // WorkloadReference points at the Kueue Workload owned for the RTJ.
@@ -791,6 +920,9 @@ func (r *ResumableTrainingJob) validationErrors() field.ErrorList {
 	// Phase 5: priority policy ref validation
 	allErrs = append(allErrs, r.validatePriorityPolicyRef()...)
 
+	// Phase 6: managedBy validation
+	allErrs = append(allErrs, r.validateManagedBy()...)
+
 	return allErrs
 }
 
@@ -878,6 +1010,30 @@ func (r *ResumableTrainingJob) validatePriorityPolicyRef() field.ErrorList {
 	}
 
 	return allErrs
+}
+
+func (r *ResumableTrainingJob) validateManagedBy() field.ErrorList {
+	var allErrs field.ErrorList
+	mb := r.Spec.ManagedBy
+	if mb == "" {
+		return allErrs
+	}
+	fldPath := field.NewPath("spec", "managedBy")
+
+	if len(mb) > MaxManagedByLength {
+		allErrs = append(allErrs, field.TooLong(fldPath, mb, MaxManagedByLength))
+	}
+	if !strings.Contains(mb, "/") {
+		allErrs = append(allErrs, field.Invalid(fldPath, mb,
+			"managedBy must be a domain-prefixed value containing '/' (e.g., kueue.x-k8s.io/multikueue)"))
+	}
+
+	return allErrs
+}
+
+// IsManagedByMultiKueue returns true when the RTJ is managed by MultiKueue.
+func (r *ResumableTrainingJob) IsManagedByMultiKueue() bool {
+	return r.Spec.ManagedBy == MultiKueueControllerName
 }
 
 // IsPriorityShapingEnabled returns true when a CheckpointPriorityPolicy is referenced.
@@ -1028,6 +1184,10 @@ func (t TopologyMode) String() string {
 
 func (g ReadinessGateState) String() string {
 	return string(g)
+}
+
+func (d MultiClusterDispatchPhase) String() string {
+	return string(d)
 }
 
 func (r ResumableTrainingJob) String() string {

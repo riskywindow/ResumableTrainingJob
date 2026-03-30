@@ -1,0 +1,45 @@
+# Phase 6 Document Index
+
+## Phase 6 Scope
+
+Phase 6: Multi-Cluster Checkpoint-Native Spillover.
+
+Build on Phase 5's checkpoint-aware priority shaping to:
+
+1. Integrate RTJ with Kueue MultiKueue external-framework dispatch.
+2. Split the RTJ operator into manager mode and worker mode.
+3. Enable shared-checkpoint remote pause/resume across worker clusters.
+4. Surface remote worker status on the manager-side RTJ.
+5. Provide a deterministic three-cluster local dev/test profile.
+
+## Documents
+
+### Design
+
+- [README.md](README.md) - overview and quick context
+- [goals.md](goals.md) - goals, non-goals, success criteria, and exit criteria
+- [architecture.md](architecture.md) - component diagrams, three sequence diagrams, detailed design
+- [adr/0001-multicluster-spillover.md](adr/0001-multicluster-spillover.md) - Phase 6 multi-cluster spillover contract and design decisions
+- [adr/0002-managedby-and-remote-status.md](adr/0002-managedby-and-remote-status.md) - managedBy field and remote status API design
+
+### API
+
+- [api.md](api.md) - Phase 6 RTJ API extensions reference (spec.managedBy, status.multiCluster)
+
+### Migration
+
+- [migration-from-phase5.md](migration-from-phase5.md) - what stays, what changes, manager vs worker ownership, why live migration is deferred, why shared checkpoint store is required
+
+### Tracking
+
+- [open-questions.md](open-questions.md) - unresolved questions with resolution plans
+- [session-handoff.md](session-handoff.md) - session state for prompt continuity
+
+## Upstream Phase References
+
+- [Phase 0 index](../phase0/index.md) - locked v1 contract
+- [Phase 1 index](../phase1/index.md) - manual pause/resume vertical slice
+- [Phase 2 index](../phase2/index.md) - native Kueue integration with preemption and resume
+- [Phase 3 index](../phase3/index.md) - admission-aware launch, flavor-aware resume, partial admission
+- [Phase 4 index](../phase4/index.md) - topology-aware admission pipeline
+- [Phase 5 index](../phase5/index.md) - checkpoint-aware priority shaping

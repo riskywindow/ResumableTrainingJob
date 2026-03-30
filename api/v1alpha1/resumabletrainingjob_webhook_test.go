@@ -674,6 +674,235 @@ func TestIsPriorityShapingEnabled(t *testing.T) {
 	}
 }
 
+// --- Phase 6 webhook tests: managedBy and multi-cluster ---
+
+func TestWebhookDefaultPreservesPhase5SpecWithoutManagedBy(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.ManagedBy = ""
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	// Phase 5 spec should pass without managedBy.
+	if job.Spec.ManagedBy != "" {
+		t.Fatalf("expected managedBy to remain empty for Phase 5 backward compat")
+	}
+}
+
+func TestWebhookValidateCreateAcceptsManagedByMultiKueue(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected spec with managedBy=multikueue to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsEmptyManagedBy(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.ManagedBy = ""
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected spec with empty managedBy to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsManagedByWithoutDomainPrefix(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.ManagedBy = "invalid-no-slash"
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject managedBy without domain prefix")
+	}
+	if !strings.Contains(err.Error(), "managedBy") {
+		t.Fatalf("expected error about managedBy, got %v", err)
+	}
+}
+
+func TestWebhookValidateUpdateRejectsManagedByChange(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	oldJob := minimalValidRTJ()
+	oldJob.Spec.ManagedBy = MultiKueueControllerName
+	oldJob.Spec.Suspend = ptr.To(true)
+	oldJob.Default()
+
+	newJob := oldJob.DeepCopy()
+	newJob.Spec.ManagedBy = "other.io/controller"
+
+	_, err := wh.ValidateUpdate(context.Background(), oldJob, newJob)
+	if err == nil {
+		t.Fatalf("expected managedBy update to fail (immutable)")
+	}
+	if !strings.Contains(err.Error(), "managedBy") {
+		t.Fatalf("expected error about managedBy immutability, got %v", err)
+	}
+}
+
+func TestWebhookValidateUpdateRejectsManagedByRemoval(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	oldJob := minimalValidRTJ()
+	oldJob.Spec.ManagedBy = MultiKueueControllerName
+	oldJob.Spec.Suspend = ptr.To(true)
+	oldJob.Default()
+
+	newJob := oldJob.DeepCopy()
+	newJob.Spec.ManagedBy = ""
+
+	_, err := wh.ValidateUpdate(context.Background(), oldJob, newJob)
+	if err == nil {
+		t.Fatalf("expected managedBy removal to fail (immutable)")
+	}
+	if !strings.Contains(err.Error(), "managedBy") {
+		t.Fatalf("expected error about managedBy immutability, got %v", err)
+	}
+}
+
+func TestWebhookValidateUpdatePreservesManagedBy(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	oldJob := minimalValidRTJ()
+	oldJob.Spec.ManagedBy = MultiKueueControllerName
+	oldJob.Spec.Suspend = ptr.To(true)
+	oldJob.Default()
+
+	newJob := oldJob.DeepCopy()
+	// Same managedBy, update desiredState only.
+	newJob.Spec.Control.DesiredState = DesiredStatePaused
+
+	if _, err := wh.ValidateUpdate(context.Background(), oldJob, newJob); err != nil {
+		t.Fatalf("expected update preserving managedBy to succeed, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsPhase5ManifestUnchangedForPhase6(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// A Phase 5 manifest with all features but no managedBy should pass.
+	job := minimalValidRTJ()
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{Name: "default-shaping"}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.ManagedBy = ""
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected Phase 5 manifest without managedBy to pass, got %v", err)
+	}
+
+	// ManagedBy must remain empty.
+	if job.Spec.ManagedBy != "" {
+		t.Fatalf("expected managedBy to stay empty for Phase 5 backward compatibility")
+	}
+}
+
+func TestWebhookValidateCreateAcceptsManagedByWithAllPhaseFeatures(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Full Phase 6 spec with all optional features enabled.
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		PodSetName:             "trainer",
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{
+		Name: "aggressive-shaping",
+	}
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected full Phase 6 spec to pass validation, got %v", err)
+	}
+}
+
+func TestIsManagedByMultiKueue(t *testing.T) {
+	tests := []struct {
+		name      string
+		managedBy string
+		want      bool
+	}{
+		{name: "empty", managedBy: "", want: false},
+		{name: "multikueue", managedBy: MultiKueueControllerName, want: true},
+		{name: "other controller", managedBy: "other.io/controller", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := minimalValidRTJ()
+			job.Spec.ManagedBy = tt.managedBy
+			if got := job.IsManagedByMultiKueue(); got != tt.want {
+				t.Fatalf("IsManagedByMultiKueue() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func webhookTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()

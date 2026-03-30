@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	webhook "sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -99,6 +100,16 @@ func (w *ResumableTrainingJobWebhook) ValidateUpdate(_ context.Context, oldObj, 
 	allErrs := newCopy.validationErrors()
 	allErrs = append(allErrs, jobframework.ValidateJobOnCreate(newGeneric)...)
 	allErrs = append(allErrs, jobframework.ValidateJobOnUpdate(oldGeneric, newGeneric, w.defaultQueueExists)...)
+
+	// Phase 6: managedBy is immutable once set.
+	if oldCopy.Spec.ManagedBy != newCopy.Spec.ManagedBy {
+		allErrs = append(allErrs, field.Invalid(
+			field.NewPath("spec", "managedBy"),
+			newCopy.Spec.ManagedBy,
+			fmt.Sprintf("managedBy is immutable once set (was %q)", oldCopy.Spec.ManagedBy),
+		))
+	}
+
 	return nil, allErrs.ToAggregate()
 }
 
