@@ -1,0 +1,14 @@
+# Phase 6 LocalQueue on the MANAGER cluster.
+#
+# RTJs submitted to this queue are dispatched to worker clusters
+# via MultiKueue. The LocalQueue points to the MultiKueue-enabled
+# ClusterQueue.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: phase6-training
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: phase6-multikueue
+spec:
+  clusterQueue: phase6-multikueue-cq

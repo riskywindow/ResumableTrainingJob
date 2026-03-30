@@ -38,6 +38,10 @@ Build on Phase 5's checkpoint-aware priority shaping to:
 
 - [migration-from-phase5.md](migration-from-phase5.md) - what stays, what changes, manager vs worker ownership, why live migration is deferred, why shared checkpoint store is required
 
+### Dev Environment
+
+- [dev-environment.md](dev-environment.md) - three-cluster local dev environment: architecture, scripts, Makefile targets, smoke test, shared store
+
 ### Tracking
 
 - [open-questions.md](open-questions.md) - unresolved questions with resolution plans

@@ -1,0 +1,43 @@
+# Phase 6 sample: Shared checkpoint store configuration.
+#
+# This manifest shows the Secrets and ConfigMap needed to configure
+# the shared checkpoint store across all clusters.
+#
+# In a production setup, these would be provisioned by your
+# infrastructure tooling. For the Phase 6 dev environment,
+# install-phase6-shared-store.sh generates these automatically.
+#
+# Placeholders:
+#   __SHARED_ENDPOINT__ -> e.g., http://172.18.0.3:30900
+---
+# ConfigMap storing the shared store endpoint metadata.
+# Used by the RTJ operator for pre-flight validation.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shared-checkpoint-store
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: phase6-shared-store
+data:
+  endpoint: __SHARED_ENDPOINT__
+  bucket: rtj-checkpoints
+  region: us-east-1
+---
+# Secret with S3-compatible credentials for the shared store.
+# This Secret must exist on every cluster that reads/writes checkpoints.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: checkpoint-storage-credentials
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: phase6-shared-store
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: minioadmin
+  AWS_SECRET_ACCESS_KEY: minioadmin123
+  AWS_ENDPOINT_URL: __SHARED_ENDPOINT__
+  AWS_REGION: us-east-1
+  AWS_S3_FORCE_PATH_STYLE: "true"
+  CHECKPOINT_BUCKET: rtj-checkpoints
