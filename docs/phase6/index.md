@@ -42,6 +42,10 @@ Build on Phase 5's checkpoint-aware priority shaping to:
 
 - [dev-environment.md](dev-environment.md) - three-cluster local dev environment: architecture, scripts, Makefile targets, smoke test, shared store
 
+### E2E Testing
+
+- [e2e.md](e2e.md) - Phase 6 e2e test coverage: remote dispatch/execution, manager suppression, deterministic cluster selection, deferred items
+
 ### Tracking
 
 - [open-questions.md](open-questions.md) - unresolved questions with resolution plans

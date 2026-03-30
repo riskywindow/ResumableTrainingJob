@@ -885,12 +885,136 @@ respected:
 
 ---
 
+## Session 7: Remote-Execution E2E Coverage
+
+- Date: 2026-03-30
+
+### Decisions Made
+
+1. **Two deterministic e2e tests created for remote dispatch/execution.**
+   `TestMultiClusterRemoteExecution` proves the full dispatch flow end-to-
+   end. `TestMultiClusterManagerSuppression` proves the manager never
+   creates local runtime resources. Both are designed as strong
+   deterministic tests rather than many shallow checks.
+
+2. **Deterministic cluster selection via ClusterQueue stopPolicy.** Worker-
+   2's ClusterQueue is patched with `spec.stopPolicy: Hold` before tests
+   that need deterministic worker selection. This prevents worker-2 from
+   admitting, forcing MultiKueue to dispatch to worker-1. The CQ is
+   restored after the test. This is the smallest practical mechanism
+   (one field, one API call).
+
+3. **Three-operator architecture for e2e.** The test starts three
+   operator instances on the host, each with a separate kubeconfig
+   extracted via `kubectl config view --minify --context=<ctx> --flatten`.
+   The manager operator runs with `--mode=manager` (no S3 needed). Worker
+   operators run with `--mode=worker` and S3 access via port-forwarded
+   MinIO. Each operator gets unique metrics and health probe ports.
+
+4. **RTJ template follows the deploy sample pattern.** Uses `secretKeyRef`
+   for shared checkpoint store credentials (resolved by the install
+   script). Includes `workloadPriorityClassName: phase6-default` for API
+   completeness.
+
+5. **Suppression invariant checked over time, not just a snapshot.** The
+   manager suppression test polls the no-child-JobSet invariant repeatedly
+   over 30 seconds to catch race conditions where a JobSet might be
+   accidentally created and then deleted.
+
+6. **Pause/resume e2e explicitly deferred.** Per the prompt scope, no
+   pause/resume e2e is included. This is documented in `docs/phase6/e2e.md`
+   as a deferred item for Session 8.
+
+### Files Created (Session 7)
+
+- `test/e2e/phase6_helpers_test.go` -- Phase 6 view types
+  (`phase6RTJView`, `phase6JobSetListView`), `phase6Env` struct,
+  `setupPhase6Env` (three-cluster environment with 3 operators),
+  `extractKubeconfig`, `kubectlContext` / `runKubectlContext`,
+  `getPhase6RTJ`, `waitForPhase6RTJState`, `listJobSetsOnCluster`,
+  `assertNoJobSetsWithPrefix`, `waitForJobSetOnCluster`,
+  `biasWorkerSelection` / `restoreWorkerSelection`,
+  `cleanupPhase6RTJ`.
+
+- `test/e2e/multicluster_remote_execution_test.go` --
+  `TestMultiClusterRemoteExecution`: 7-step test proving remote dispatch,
+  mirror RTJ on worker, child JobSet on worker-1 only, no local runtime
+  on manager or worker-2, manager status reflects execution.
+
+- `test/e2e/multicluster_manager_suppression_test.go` --
+  `TestMultiClusterManagerSuppression`: 6-step test proving manager never
+  creates local runtime, suppression invariant holds over time,
+  dispatch lifecycle progresses.
+
+- `test/e2e/testdata/phase6/rtj-remote-dispatch.yaml` -- RTJ template
+  with `spec.managedBy: kueue.x-k8s.io/multikueue`, shared store
+  credentials via `secretKeyRef`, standard Phase 6 queue configuration.
+
+- `docs/phase6/e2e.md` -- E2E test documentation: what each test proves,
+  deterministic selection mechanism, test infrastructure architecture,
+  deferred items with reasons.
+
+- `docs/phase6/index.md` -- updated with link to `e2e.md`.
+
+- `docs/phase6/session-handoff.md` -- this file (updated).
+
+### Tests Run
+
+- `go vet ./test/e2e/...` -- clean (no compilation errors)
+- `go test ./... -short` -- all packages pass:
+  - `api/v1alpha1` -- pass
+  - `internal/admissionchecks/resume` -- pass
+  - `internal/checkpoints` -- pass
+  - `internal/controller` -- pass
+  - `internal/jobset` -- pass
+  - `internal/kueue` -- pass
+  - `internal/multikueue` -- pass
+  - `internal/policy/checkpointpriority` -- pass
+  - `internal/remote` -- pass
+  - `internal/topology` -- pass
+  - `test/e2e` -- pass (e2e tests skip when `RUN_KIND_E2E!=1`)
+
+### Hard Boundary Verification
+
+| Boundary | Status |
+|---|---|
+| Manager must not create local runtime for MultiKueue-managed RTJs | Verified: `TestMultiClusterRemoteExecution` Step 5, `TestMultiClusterManagerSuppression` Steps 3+5 |
+| Selected worker cluster must be the only place where child JobSets appear | Verified: `TestMultiClusterRemoteExecution` Steps 4+6 |
+| Shared checkpoint store requirement intact | Verified: RTJ template uses shared credentials via `secretKeyRef` |
+| Prefer a few strong deterministic tests over many shallow ones | Verified: 2 tests with 13 assertions total, each proving a distinct invariant |
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | MultiKueue external-framework protocol for custom CRDs | Blocks G1 | **Resolved:** Session 4. |
+| OQ-2 | Pause propagation via MultiKueue | Blocks G3 | **Resolved:** Session 4. |
+| OQ-3 | Remote RTJ status visibility on the manager | Affects G4 | **Resolved:** Sessions 4 & 5. |
+| OQ-4 | Manager-mode detection (all-or-nothing vs per-RTJ) | Affects G2 | **Resolved:** Session 3. |
+| OQ-5 | Shared checkpoint store credential distribution | Affects G3/G5 | **Resolved:** Session 6. |
+| OQ-6 | MultiKueueCluster kubeconfig management in kind | Affects G5 | **Resolved:** Session 6. |
+| OQ-7 | Kueue MultiKueue feature gate status in v0.15.1 | Affects isolation strategy | **Resolved:** Session 4. |
+| OQ-8 | Remote RTJ cleanup on manager-side deletion | Affects lifecycle correctness | **Resolved:** Session 4. |
+| OQ-9 | MultiKueue dispatch and Kueue preemption interaction | Affects preemption path | **Resolved:** Session 4. |
+| OQ-10 | Phase 5 deferred items for Phase 6 | Minor worker-side improvements | Tentatively resolved: bundle with Phase 6 |
+
+### Divergence Notes
+
+No divergence from the mission statement. All hard boundaries are
+respected:
+- Manager does NOT create local child JobSets for MultiKueue-managed RTJs (e2e tested).
+- Selected worker cluster is the only place where child JobSets appear (e2e tested).
+- Shared checkpoint store requirement intact (template uses shared credentials).
+- Strong deterministic tests preferred over shallow coverage.
+- Pause/resume e2e explicitly excluded per prompt scope.
+
+---
+
 ## Recommended Next Prompt
 
-All ten open questions are now resolved. G5 (deterministic three-cluster
-local dev/test profile) is complete. The recommended next session is:
-
-### Session 7: Cross-Worker Resume Validation (G3)
+### Session 8: Cross-Worker Resume Validation (G3)
 
 **Goal:** Validate that the shared checkpoint store enables cross-worker
 resume: pause on worker-1, re-dispatch to worker-2, resume from the
