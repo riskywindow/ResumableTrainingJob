@@ -1,0 +1,39 @@
+# MultiKueueCluster template for the MANAGER cluster.
+#
+# Create one MultiKueueCluster per worker cluster. Each requires a
+# kubeconfig Secret that grants Kueue access to the worker cluster's
+# API server.
+#
+# The kubeconfig Secret must be in the kueue-system namespace (or
+# wherever the Kueue controller manager runs) and contain a single
+# key "kubeconfig" with a valid kubeconfig YAML.
+#
+# IMPORTANT: The kubeconfig must have sufficient permissions on the
+# worker cluster to manage:
+#   - kueue.x-k8s.io/v1beta2 Workload resources (get, list, watch,
+#     create, update, patch, delete)
+#   - training.checkpoint.example.io/v1alpha1 ResumableTrainingJob
+#     resources (get, list, watch, create, delete)
+#   - training.checkpoint.example.io/v1alpha1 ResumableTrainingJob/status
+#     (get)
+#
+# Replace WORKER_NAME with the actual cluster name (e.g., "worker-1").
+# Replace SECRET_NAME with the Secret containing the worker kubeconfig.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: MultiKueueCluster
+metadata:
+  name: worker-1
+spec:
+  kubeConfig:
+    locationType: Secret
+    location: worker-1-kubeconfig
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: MultiKueueCluster
+metadata:
+  name: worker-2
+spec:
+  kubeConfig:
+    locationType: Secret
+    location: worker-2-kubeconfig

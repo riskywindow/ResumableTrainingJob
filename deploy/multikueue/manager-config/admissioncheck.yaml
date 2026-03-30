@@ -1,0 +1,21 @@
+# MultiKueue AdmissionCheck for the MANAGER cluster.
+#
+# This AdmissionCheck tells Kueue that Workloads in ClusterQueues referencing
+# this check should be dispatched via MultiKueue to worker clusters instead
+# of being admitted locally.
+#
+# The controllerName MUST be "kueue.x-k8s.io/multikueue" -- this is the
+# well-known controller name for Kueue's built-in MultiKueue admission
+# check controller.
+#
+# The parameters reference a MultiKueueConfig that lists the worker clusters.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: AdmissionCheck
+metadata:
+  name: multikueue
+spec:
+  controllerName: kueue.x-k8s.io/multikueue
+  parameters:
+    apiGroup: kueue.x-k8s.io
+    kind: MultiKueueConfig
+    name: multikueue-config

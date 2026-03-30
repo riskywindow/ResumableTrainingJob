@@ -1,0 +1,23 @@
+# MultiKueueConfig for the MANAGER cluster.
+#
+# This resource lists the worker clusters that MultiKueue can dispatch
+# Workloads to. Each cluster name references a MultiKueueCluster resource.
+#
+# Dispatch mode:
+#   - AllAtOnce (default): Kueue creates remote Workloads on ALL listed
+#     clusters simultaneously. The first cluster to reserve quota wins;
+#     remote Workloads on other clusters are cleaned up.
+#   - Incremental: Kueue creates remote Workloads one cluster at a time,
+#     trying the next only if the previous does not reserve quota within
+#     a timeout.
+#
+# For RTJ spillover, AllAtOnce is appropriate because it allows the fastest
+# cluster with available quota to claim the job.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: MultiKueueConfig
+metadata:
+  name: multikueue-config
+spec:
+  clusters:
+    - worker-1
+    - worker-2
