@@ -1,0 +1,15 @@
+# Phase 6 LocalQueue on WORKER clusters.
+#
+# This queue name must match the manager-side LocalQueue name because
+# MultiKueue creates remote Workloads with the same queue-name label.
+# The LocalQueue on the worker side points to the real worker
+# ClusterQueue with actual resource quotas.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: phase6-training
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: phase6-worker
+spec:
+  clusterQueue: phase6-worker-cq

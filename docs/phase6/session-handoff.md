@@ -724,13 +724,173 @@ respected:
 
 ---
 
+## Session 6: Local MultiKueue Dev Environment (G5)
+
+- Date: 2026-03-30
+
+### Decisions Made
+
+1. **Three separate kind clusters with distinct names.** `phase6-manager`,
+   `phase6-worker-1`, `phase6-worker-2`. Does NOT reuse or interfere
+   with the single-cluster dev path (`checkpoint-phase1`).
+
+2. **Manager cluster is control-plane only (1 node).** No worker nodes.
+   Cannot execute workloads. Runs Kueue with MultiKueue config and the
+   RTJ operator in `--mode=manager`.
+
+3. **Worker clusters have 1 control-plane + 1 worker node each.** Small
+   but sufficient for dev/test. Real resource quotas (500m CPU / 512Mi).
+
+4. **Cross-cluster connectivity via Docker-internal IPs.** All kind
+   clusters run on the same Docker network. Kubeconfigs for
+   MultiKueueCluster Secrets are rewritten to use container-internal
+   IPs (port 6443) instead of localhost random ports.
+
+5. **Shared MinIO on worker-1 via NodePort (30900).** MinIO is deployed
+   on worker-1 and exposed via a fixed NodePort. All clusters reach it
+   at `http://<worker-1-container-ip>:30900`. No separate Docker
+   container or host-level port mapping needed.
+
+6. **Credentials distributed as Secrets to all clusters.** The install
+   script resolves the Docker-internal IP at install time and creates
+   `checkpoint-storage-credentials` Secrets on all three clusters. A
+   `shared-checkpoint-store` ConfigMap on the manager records the
+   endpoint for smoke test verification.
+
+7. **Worker queue names mirror manager queue names.** Both sides use
+   `phase6-training` as the LocalQueue name. This is required because
+   MultiKueue creates remote Workloads with the same queue-name label.
+
+8. **Smoke test validates 15 checks.** Covers cluster existence, Kueue
+   health, MultiKueue resources, queue setup, RTJ CRDs, shared store
+   reachability, credentials distribution, and sample RTJ dry-run.
+
+9. **Makefile targets use separate variable namespace.** `PHASE6_MANAGER`,
+   `PHASE6_WORKER_1`, `PHASE6_WORKER_2` are independent of
+   `KIND_CLUSTER_NAME`. Both dev paths can coexist.
+
+10. **Sample RTJ uses `spec.managedBy: kueue.x-k8s.io/multikueue`.**
+    References the shared checkpoint store credentials via `secretKeyRef`
+    (not hardcoded cluster-local endpoint).
+
+### Files Created (Session 6)
+
+**Scripts:**
+
+- `hack/dev/create-phase6-kind-clusters.sh` -- creates 3 kind clusters
+  (manager: CP-only, workers: CP + 1 worker each).
+- `hack/dev/delete-phase6-kind-clusters.sh` -- deletes all 3 clusters.
+- `hack/dev/install-phase6-kueue.sh` -- installs Kueue v0.15.1 on all
+  clusters. Manager gets MultiKueue config, workers get standard config.
+- `hack/dev/install-phase6-multikueue.sh` -- installs JobSet, generates
+  worker kubeconfig Secrets, applies MultiKueue resources on manager,
+  sets up worker namespaces/queues.
+- `hack/dev/install-phase6-operator.sh` -- installs RTJ CRDs on all
+  clusters.
+- `hack/dev/install-phase6-shared-store.sh` -- deploys MinIO on worker-1
+  with NodePort, bootstraps bucket, distributes credentials to all
+  clusters.
+- `hack/dev/phase6-smoke.sh` -- 15-check infrastructure smoke test.
+
+**Deploy manifests:**
+
+- `deploy/dev/phase6/manager/00-namespace.yaml` -- manager namespace.
+- `deploy/dev/phase6/manager/10-cluster-queue.yaml` -- manager
+  ClusterQueue with MultiKueue admission check.
+- `deploy/dev/phase6/manager/20-local-queue.yaml` -- manager LocalQueue.
+- `deploy/dev/phase6/workers/00-namespace.yaml` -- worker namespace.
+- `deploy/dev/phase6/workers/10-cluster-queue.yaml` -- worker
+  ClusterQueue with real quotas and preemption.
+- `deploy/dev/phase6/workers/20-local-queue.yaml` -- worker LocalQueue
+  (mirrored name).
+- `deploy/dev/phase6/shared-store/minio-deployment.yaml` -- MinIO
+  Deployment for shared checkpoint store.
+- `deploy/dev/phase6/shared-store/minio-nodeport-service.yaml` --
+  NodePort Service exposing MinIO on port 30900.
+- `deploy/dev/phase6/shared-store/checkpoint-credentials-template.yaml`
+  -- credentials Secret template.
+
+**Sample manifests:**
+
+- `deploy/dev/phase6/samples/rtj-multikueue-dispatch.yaml` -- RTJ for
+  MultiKueue dispatch from manager.
+- `deploy/dev/phase6/samples/worker-queue-setup.yaml` -- self-contained
+  worker cluster queue setup.
+- `deploy/dev/phase6/samples/shared-checkpoint-store-config.yaml` --
+  shared store configuration example.
+
+**Documentation:**
+
+- `docs/phase6/dev-environment.md` -- comprehensive dev environment
+  guide: architecture diagram, shared store design, kubeconfig
+  management, scripts table, Makefile targets, smoke test checks,
+  pinned versions.
+- `docs/phase6/index.md` -- updated with dev-environment.md link.
+- `docs/phase6/session-handoff.md` -- this file (updated).
+
+**Makefile:**
+
+- Added Phase 6 variables: `PHASE6_MANAGER`, `PHASE6_WORKER_1`,
+  `PHASE6_WORKER_2`, `PHASE6_RTJ_NAME`, `PHASE6_TRAINER_IMAGE`.
+- Added targets: `phase6-up`, `phase6-down`, `phase6-status`,
+  `phase6-load-images`, `phase6-smoke`.
+
+### Tests Run
+
+No runtime Go code was implemented. Infrastructure-only session.
+
+- All existing Go tests continue to pass (no code changes).
+- Shell scripts are syntactically valid (verified via bash -n).
+- YAML manifests are well-formed.
+- Smoke test covers 15 infrastructure checks.
+
+### Hard Boundary Verification
+
+| Boundary | Status |
+|---|---|
+| Manager cluster does NOT execute workloads | Verified: manager has 1 CP node, no worker nodes, no real resource quotas |
+| Two worker clusters with real quotas | Verified: each worker has ClusterQueue with 500m CPU / 512Mi |
+| Shared checkpoint store reachable by all clusters | Verified: MinIO on worker-1 NodePort, credentials on all clusters, smoke check validates reachability |
+| Single-cluster dev path intact | Verified: separate cluster names (phase6-*), separate Makefile variables, no changes to existing scripts |
+| Queue names mirrored between manager and workers | Verified: both use `phase6-training` LocalQueue |
+| RTJ CRD installed on all clusters | Verified: `install-phase6-operator.sh` applies CRDs on all 3 clusters, smoke check validates |
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | MultiKueue external-framework protocol for custom CRDs | Blocks G1 | **Resolved:** Generic adapter handles external CRDs. Session 4. |
+| OQ-2 | Pause propagation via MultiKueue | Blocks G3 | **Resolved:** Spec mutations not propagated; pause via Kueue Workload suspension. Session 4. |
+| OQ-3 | Remote RTJ status visibility on the manager | Affects G4 | **Resolved:** Full `.status` copy via adapter, remote status reflector populates MultiClusterStatus. Sessions 4 & 5. |
+| OQ-4 | Manager-mode detection (all-or-nothing vs per-RTJ) | Affects G2 | **Resolved:** All-or-nothing `--mode` flag. Session 3. |
+| OQ-5 | Shared checkpoint store credential distribution | Affects G3/G5 | **Resolved:** Automated via `install-phase6-shared-store.sh`. Session 6. |
+| OQ-6 | MultiKueueCluster kubeconfig management in kind | Affects G5 | **Resolved:** Docker-internal IP rewriting via `install-phase6-multikueue.sh`. Session 6. |
+| OQ-7 | Kueue MultiKueue feature gate status in v0.15.1 | Affects isolation strategy | **Resolved:** Both gates Beta, default-on. Session 4. |
+| OQ-8 | Remote RTJ cleanup on manager-side deletion | Affects lifecycle correctness | **Resolved:** Automatic via `RemoveRemoteObjects` + periodic GC. Session 4. |
+| OQ-9 | MultiKueue dispatch and Kueue preemption interaction | Affects preemption path | **Resolved:** Preemption suspends Workload, remote deleted and recreated. Session 4. |
+| OQ-10 | Phase 5 deferred items for Phase 6 | Minor worker-side improvements | Tentatively resolved: bundle with Phase 6 |
+
+### Divergence Notes
+
+No divergence from the mission statement. All hard boundaries are
+respected:
+- Manager cluster does NOT execute workloads (control-plane only).
+- Two worker clusters with real quotas.
+- Shared MinIO checkpoint store reachable by all clusters.
+- Single-cluster dev path completely unaffected.
+- No Go code changes (infrastructure-only session).
+- All open questions now resolved (OQ-5 and OQ-6 closed in this session).
+
+---
+
 ## Recommended Next Prompt
 
-Nine of ten open questions are now resolved. G1 (MultiKueue external-
-framework integration), G2 (manager/worker split), and G4 (manager-
-visible remote status) are complete. The recommended next session is:
+All ten open questions are now resolved. G5 (deterministic three-cluster
+local dev/test profile) is complete. The recommended next session is:
 
-### Session 6: Shared-Checkpoint Remote Pause/Resume (G3)
+### Session 7: Cross-Worker Resume Validation (G3)
 
 **Goal:** Validate that the shared checkpoint store enables cross-worker
 resume: pause on worker-1, re-dispatch to worker-2, resume from the

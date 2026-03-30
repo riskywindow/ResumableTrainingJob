@@ -1,0 +1,107 @@
+# Phase 6 sample: RTJ submitted on the manager cluster for MultiKueue dispatch.
+#
+# This RTJ sets spec.managedBy to enable MultiKueue dispatch. When
+# submitted to the manager cluster's phase6-training LocalQueue, Kueue
+# will dispatch it to one of the worker clusters (worker-1 or worker-2)
+# via the MultiKueue external-framework adapter.
+#
+# The worker cluster will run the full Phase 5 reconciliation path
+# (launch gating, priority shaping, checkpoint management).
+#
+# Key fields:
+#   spec.managedBy: kueue.x-k8s.io/multikueue  -- enables MultiKueue dispatch
+#   spec.queueName: phase6-training              -- the MultiKueue-enabled LocalQueue
+#   spec.checkpoint.storageURI: s3://rtj-checkpoints -- shared store (all clusters)
+#
+# Placeholders:
+#   __RTJ_NAME__       -> RTJ name (default: phase6-dispatch-demo)
+#   __TRAINER_IMAGE__  -> trainer container image
+#   __DEV_NAMESPACE__  -> target namespace (default: checkpoint-dev)
+#   __SHARED_ENDPOINT__ -> shared MinIO endpoint (resolved by install script)
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase6-training
+spec:
+  managedBy: kueue.x-k8s.io/multikueue
+  suspend: true
+  queueName: phase6-training
+  control:
+    desiredState: Running
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: cpu-only
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: AWS_ACCESS_KEY_ID
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_ACCESS_KEY_ID
+                          - name: AWS_SECRET_ACCESS_KEY
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_SECRET_ACCESS_KEY
+                          - name: AWS_ENDPOINT_URL
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_ENDPOINT_URL
+                          - name: AWS_DEFAULT_REGION
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_REGION
+                          - name: SLEEP_PER_STEP
+                            value: "5"
+                          - name: CHECKPOINT_EVERY
+                            value: "3"
+                          - name: TOTAL_STEPS
+                            value: "100"
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

@@ -1,0 +1,14 @@
+# Phase 6 namespace on WORKER clusters.
+#
+# This namespace must mirror the manager-side namespace name so that
+# MultiKueue can create remote RTJ copies in the same namespace.
+# The kueue-managed label enables Kueue processing.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: checkpoint-dev
+  labels:
+    checkpoint-native.dev/enabled: "true"
+    checkpoint-native.dev/phase: "phase6"
+    checkpoint-native.dev/kueue-managed: "true"
+    checkpoint-native.dev/role: "worker"

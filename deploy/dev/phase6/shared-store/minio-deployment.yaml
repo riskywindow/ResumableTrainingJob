@@ -1,0 +1,65 @@
+# Phase 6 shared MinIO deployment.
+#
+# Deployed on worker-1 and exposed via NodePort so that all clusters
+# (manager, worker-1, worker-2) can reach it via the Docker-internal
+# network IP of worker-1's control-plane container.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: checkpoint-dev
+  labels:
+    app.kubernetes.io/name: minio
+    checkpoint-native.dev/profile: phase6-shared-store
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minio
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio
+    spec:
+      containers:
+        - name: minio
+          image: quay.io/minio/minio:RELEASE.2025-06-13T11-33-47Z
+          imagePullPolicy: IfNotPresent
+          args:
+            - server
+            - /data
+            - --console-address
+            - :9001
+          envFrom:
+            - secretRef:
+                name: minio-root-credentials
+          ports:
+            - containerPort: 9000
+              name: s3
+            - containerPort: 9001
+              name: console
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: s3
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: s3
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}

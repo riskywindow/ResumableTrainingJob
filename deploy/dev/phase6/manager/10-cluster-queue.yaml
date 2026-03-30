@@ -1,0 +1,30 @@
+# Phase 6 ClusterQueue on the MANAGER cluster.
+#
+# This ClusterQueue uses the "multikueue" AdmissionCheck so that all
+# Workloads admitted here are dispatched to worker clusters via MultiKueue
+# instead of being satisfied locally.
+#
+# The manager cluster does NOT execute workloads. The resource quotas here
+# are generous (routing layer only). Real quota enforcement happens on
+# worker clusters.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: phase6-multikueue-cq
+  labels:
+    checkpoint-native.dev/profile: phase6-multikueue
+spec:
+  admissionChecks:
+    - multikueue
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources: ["cpu", "memory"]
+      flavors:
+        - name: default-flavor
+          resources:
+            - name: cpu
+              nominalQuota: "1000"
+            - name: memory
+              nominalQuota: "1000Gi"

@@ -1,0 +1,65 @@
+# Phase 6 sample: Complete worker cluster queue setup.
+#
+# This is a self-contained manifest that creates all resources needed
+# on a worker cluster to receive MultiKueue-dispatched RTJs. Apply
+# this to each worker cluster.
+#
+# Resources:
+#   1. Namespace with kueue-managed label
+#   2. ResourceFlavor (default-flavor)
+#   3. ClusterQueue with real quotas and preemption
+#   4. LocalQueue (name must match manager-side queue)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: checkpoint-dev
+  labels:
+    checkpoint-native.dev/enabled: "true"
+    checkpoint-native.dev/phase: "phase6"
+    checkpoint-native.dev/kueue-managed: "true"
+    checkpoint-native.dev/role: "worker"
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: default-flavor
+  labels:
+    checkpoint-native.dev/profile: phase6-worker
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: phase6-worker-cq
+  labels:
+    checkpoint-native.dev/profile: phase6-worker
+spec:
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+      flavors:
+        - name: default-flavor
+          resources:
+            - name: cpu
+              nominalQuota: 500m
+            - name: memory
+              nominalQuota: 512Mi
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Never
+    borrowWithinCohort:
+      maxPriorityThreshold: 0
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: phase6-training
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: phase6-worker
+spec:
+  clusterQueue: phase6-worker-cq

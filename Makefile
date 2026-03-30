@@ -19,6 +19,11 @@ PHASE4_TRAINER_IMAGE ?= $(PHASE3_TRAINER_IMAGE)
 PHASE5_LOW_RTJ_NAME ?= phase5-low-demo
 PHASE5_HIGH_RTJ_NAME ?= phase5-high-demo
 PHASE5_TRAINER_IMAGE ?= $(PHASE4_TRAINER_IMAGE)
+PHASE6_MANAGER ?= phase6-manager
+PHASE6_WORKER_1 ?= phase6-worker-1
+PHASE6_WORKER_2 ?= phase6-worker-2
+PHASE6_RTJ_NAME ?= phase6-dispatch-demo
+PHASE6_TRAINER_IMAGE ?= $(PHASE5_TRAINER_IMAGE)
 
 .PHONY: dev-up dev-down dev-status dev-smoke phase2-smoke load-images submit-example pause-example resume-example inspect-example submit-low submit-high inspect-rtj inspect-kueue e2e e2e-phase2
 .PHONY: phase3-up phase3-down phase3-status phase3-load-images phase3-smoke phase3-profile e2e-phase3
@@ -31,6 +36,7 @@ PHASE5_TRAINER_IMAGE ?= $(PHASE4_TRAINER_IMAGE)
 .PHONY: phase5-submit-low phase5-submit-high
 .PHONY: phase5-inspect-priority phase5-inspect-policy phase5-inspect-workload phase5-inspect-checkpoints
 .PHONY: e2e-phase5
+.PHONY: phase6-up phase6-down phase6-status phase6-load-images phase6-smoke
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -368,3 +374,121 @@ phase5-inspect-checkpoints:
 
 e2e-phase5:
 	RUN_KIND_E2E=1 PHASE5_TRAINER_IMAGE=$(PHASE5_TRAINER_IMAGE) go test ./test/e2e -run 'TestProtectedPriority|TestPriorityDrop|TestYieldBudget' -v -timeout 20m
+
+# ── Phase 6 targets ──────────────────────────────────────────────────
+#
+# phase6-up:          Create three kind clusters (manager + 2 workers),
+#                     install Kueue, JobSet, MultiKueue, RTJ CRDs, and
+#                     the shared checkpoint store. Full deterministic setup.
+# phase6-down:        Delete all three Phase 6 kind clusters.
+# phase6-status:      Show cluster state across all three clusters:
+#                     MultiKueue resources, queues, RTJ CRDs, shared store.
+# phase6-load-images: Load images into all three kind clusters.
+# phase6-smoke:       Run Phase 6 infrastructure smoke test. Verifies
+#                     cluster existence, Kueue, MultiKueue config,
+#                     queues, RTJ CRDs, shared store, and dry-run RTJ.
+#
+# The Phase 6 profile exercises:
+#   G1: MultiKueue external-framework integration for RTJ
+#   G2: Manager/worker operator split (--mode flag)
+#   G3: Shared-checkpoint remote pause/resume
+#   G4: Manager-visible remote status
+#   G5: Deterministic three-cluster local dev/test profile
+#
+# IMPORTANT: Phase 6 uses separate kind cluster names (phase6-manager,
+# phase6-worker-1, phase6-worker-2) and does NOT interfere with the
+# single-cluster dev path (checkpoint-phase1).
+
+phase6-up:
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_WORKER_1=$(PHASE6_WORKER_1) \
+	  PHASE6_WORKER_2=$(PHASE6_WORKER_2) \
+	  ./hack/dev/create-phase6-kind-clusters.sh
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_WORKER_1=$(PHASE6_WORKER_1) \
+	  PHASE6_WORKER_2=$(PHASE6_WORKER_2) \
+	  ./hack/dev/install-phase6-kueue.sh
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_WORKER_1=$(PHASE6_WORKER_1) \
+	  PHASE6_WORKER_2=$(PHASE6_WORKER_2) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/install-phase6-multikueue.sh
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_WORKER_1=$(PHASE6_WORKER_1) \
+	  PHASE6_WORKER_2=$(PHASE6_WORKER_2) \
+	  ./hack/dev/install-phase6-operator.sh
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_WORKER_1=$(PHASE6_WORKER_1) \
+	  PHASE6_WORKER_2=$(PHASE6_WORKER_2) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/install-phase6-shared-store.sh
+	@echo
+	@echo "Phase 6 multi-cluster dev environment is ready"
+	@echo "  manager:  kind-$(PHASE6_MANAGER)"
+	@echo "  worker-1: kind-$(PHASE6_WORKER_1)"
+	@echo "  worker-2: kind-$(PHASE6_WORKER_2)"
+
+phase6-down:
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_WORKER_1=$(PHASE6_WORKER_1) \
+	  PHASE6_WORKER_2=$(PHASE6_WORKER_2) \
+	  ./hack/dev/delete-phase6-kind-clusters.sh
+
+phase6-status:
+	@echo "=== Phase 6 Multi-Cluster Status ==="
+	@echo
+	@echo "--- Manager: kind-$(PHASE6_MANAGER) ---"
+	@kubectl cluster-info --context "kind-$(PHASE6_MANAGER)" 2>/dev/null || echo "  (not reachable)"
+	@echo "nodes:"
+	@kubectl get nodes --context "kind-$(PHASE6_MANAGER)" 2>/dev/null || true
+	@echo "kueue:"
+	@kubectl -n kueue-system get deployment kueue-controller-manager --context "kind-$(PHASE6_MANAGER)" 2>/dev/null || true
+	@echo "multikueue:"
+	@kubectl get admissionchecks.kueue.x-k8s.io --context "kind-$(PHASE6_MANAGER)" 2>/dev/null || echo "  (none)"
+	@kubectl get multikueueconfigs.kueue.x-k8s.io --context "kind-$(PHASE6_MANAGER)" 2>/dev/null || echo "  (none)"
+	@kubectl get multikueueclusters.kueue.x-k8s.io --context "kind-$(PHASE6_MANAGER)" 2>/dev/null || echo "  (none)"
+	@echo "queues:"
+	@kubectl get clusterqueues.kueue.x-k8s.io --context "kind-$(PHASE6_MANAGER)" 2>/dev/null || echo "  (none)"
+	@kubectl get localqueues.kueue.x-k8s.io -n $(DEV_NAMESPACE) --context "kind-$(PHASE6_MANAGER)" 2>/dev/null || echo "  (none)"
+	@echo "rtj crd:"
+	@kubectl get crd resumabletrainingjobs.training.checkpoint.example.io --context "kind-$(PHASE6_MANAGER)" --no-headers 2>/dev/null || echo "  (not installed)"
+	@echo
+	@echo "--- Worker-1: kind-$(PHASE6_WORKER_1) ---"
+	@kubectl get nodes --context "kind-$(PHASE6_WORKER_1)" 2>/dev/null || echo "  (not reachable)"
+	@echo "kueue:"
+	@kubectl -n kueue-system get deployment kueue-controller-manager --context "kind-$(PHASE6_WORKER_1)" 2>/dev/null || true
+	@echo "queues:"
+	@kubectl get clusterqueues.kueue.x-k8s.io --context "kind-$(PHASE6_WORKER_1)" 2>/dev/null || echo "  (none)"
+	@kubectl get localqueues.kueue.x-k8s.io -n $(DEV_NAMESPACE) --context "kind-$(PHASE6_WORKER_1)" 2>/dev/null || echo "  (none)"
+	@echo "rtj crd:"
+	@kubectl get crd resumabletrainingjobs.training.checkpoint.example.io --context "kind-$(PHASE6_WORKER_1)" --no-headers 2>/dev/null || echo "  (not installed)"
+	@echo
+	@echo "--- Worker-2: kind-$(PHASE6_WORKER_2) ---"
+	@kubectl get nodes --context "kind-$(PHASE6_WORKER_2)" 2>/dev/null || echo "  (not reachable)"
+	@echo "kueue:"
+	@kubectl -n kueue-system get deployment kueue-controller-manager --context "kind-$(PHASE6_WORKER_2)" 2>/dev/null || true
+	@echo "queues:"
+	@kubectl get clusterqueues.kueue.x-k8s.io --context "kind-$(PHASE6_WORKER_2)" 2>/dev/null || echo "  (none)"
+	@kubectl get localqueues.kueue.x-k8s.io -n $(DEV_NAMESPACE) --context "kind-$(PHASE6_WORKER_2)" 2>/dev/null || echo "  (none)"
+	@echo "rtj crd:"
+	@kubectl get crd resumabletrainingjobs.training.checkpoint.example.io --context "kind-$(PHASE6_WORKER_2)" --no-headers 2>/dev/null || echo "  (not installed)"
+	@echo
+	@echo "--- Shared Checkpoint Store ---"
+	@kubectl -n $(DEV_NAMESPACE) get configmap shared-checkpoint-store -o jsonpath='{.data}' --context "kind-$(PHASE6_MANAGER)" 2>/dev/null || echo "  (not configured)"
+	@echo
+
+phase6-load-images:
+	@set -euo pipefail; \
+	for cluster in $(PHASE6_MANAGER) $(PHASE6_WORKER_1) $(PHASE6_WORKER_2); do \
+		for image in $(IMAGES); do \
+			echo "loading $$image into kind cluster $$cluster"; \
+			kind load docker-image --name "$$cluster" "$$image"; \
+		done; \
+	done
+
+phase6-smoke:
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_WORKER_1=$(PHASE6_WORKER_1) \
+	  PHASE6_WORKER_2=$(PHASE6_WORKER_2) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/phase6-smoke.sh
