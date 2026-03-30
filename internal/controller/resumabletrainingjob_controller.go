@@ -35,6 +35,11 @@ type ResumableTrainingJobReconciler struct {
 	Catalog checkpoints.Catalog
 	Metrics *operatormetrics.Recorder
 	Now     func() metav1.Time
+
+	// Mode determines how this operator instance handles RTJ reconciliation.
+	// ModeWorker (default) runs the full Phase 5 runtime path.
+	// ModeManager suppresses local runtime for MultiKueue-managed RTJs.
+	Mode OperatorMode
 }
 
 // +kubebuilder:rbac:groups=training.checkpoint.example.io,resources=resumabletrainingjobs,verbs=get;list;watch;update;patch
@@ -83,6 +88,13 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
+	}
+
+	// Phase 6: In manager mode, suppress the entire runtime path for RTJs
+	// managed by MultiKueue. The manager reconciles intent and status only;
+	// runtime execution is delegated to a remote worker cluster.
+	if ShouldSuppressRuntime(r.Mode, &job) {
+		return r.reconcileManagerIntent(ctx, &job)
 	}
 
 	activeJobSet, activeExists, err := r.getActiveJobSet(ctx, &job)
@@ -272,6 +284,32 @@ func (r *ResumableTrainingJobReconciler) failLaunch(
 		}
 	}
 	return ctrl.Result{}, errors.New(message)
+}
+
+// reconcileManagerIntent handles RTJs managed by MultiKueue when the operator
+// is running in manager mode. It sets the MultiCluster status to indicate that
+// local runtime execution is suppressed and reconciles the manager-side intent
+// (desired state). It does NOT create child JobSets, control ConfigMaps, or
+// perform any checkpoint I/O.
+func (r *ResumableTrainingJobReconciler) reconcileManagerIntent(
+	ctx context.Context,
+	job *trainingv1alpha1.ResumableTrainingJob,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	now := r.now()
+
+	changed := markManagerSuppressed(job, now)
+	if changed {
+		if err := r.Status().Update(ctx, job); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	logger.Info("manager mode: local runtime suppressed for MultiKueue-managed RTJ",
+		"dispatchPhase", job.Status.MultiCluster.DispatchPhase,
+		"localExecutionSuppressed", job.Status.MultiCluster.LocalExecutionSuppressed,
+	)
+	return ctrl.Result{}, nil
 }
 
 func (r *ResumableTrainingJobReconciler) SetupWithManager(mgr ctrl.Manager) error {

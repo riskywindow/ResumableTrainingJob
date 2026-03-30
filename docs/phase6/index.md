@@ -22,6 +22,10 @@ Build on Phase 5's checkpoint-aware priority shaping to:
 - [adr/0001-multicluster-spillover.md](adr/0001-multicluster-spillover.md) - Phase 6 multi-cluster spillover contract and design decisions
 - [adr/0002-managedby-and-remote-status.md](adr/0002-managedby-and-remote-status.md) - managedBy field and remote status API design
 
+### Implementation
+
+- [operator-modes.md](operator-modes.md) - operator mode split: manager vs worker mode semantics, ownership table, detection logic, configuration, test coverage
+
 ### API
 
 - [api.md](api.md) - Phase 6 RTJ API extensions reference (spec.managedBy, status.multiCluster)

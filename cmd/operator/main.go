@@ -38,6 +38,7 @@ func main() {
 	var probeAddr string
 	var enableLeaderElection bool
 	var enableExperimentalPartialAdmission bool
+	var modeFlag string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -47,6 +48,11 @@ func main() {
 			"When enabled, RTJs with spec.parallelism.enablePartialAdmission=true will "+
 			"synthesize PodSet.MinCount for Kueue partial admission. "+
 			"Requires Kueue PartialAdmission feature gate (Beta, default-on in v0.15.1).")
+	flag.StringVar(&modeFlag, "mode", string(controller.ModeWorker),
+		"Operator mode: 'worker' (default) runs the full Phase 5 runtime path "+
+			"for single-cluster and MultiKueue worker deployments. "+
+			"'manager' suppresses local child JobSet creation for MultiKueue-managed RTJs "+
+			"and delegates runtime execution to remote worker clusters.")
 
 	opts := zap.Options{
 		Development: true,
@@ -55,6 +61,12 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	operatorMode, err := controller.ParseOperatorMode(modeFlag)
+	if err != nil {
+		setupLog.Error(err, "invalid --mode flag")
+		os.Exit(1)
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
@@ -76,6 +88,7 @@ func main() {
 		Client:  mgr.GetClient(),
 		Scheme:  mgr.GetScheme(),
 		Metrics: metricsRecorder,
+		Mode:    operatorMode,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ResumableTrainingJob")
 		os.Exit(1)
@@ -114,6 +127,7 @@ func main() {
 
 	setupLog.Info(
 		"starting manager",
+		"operatorMode", operatorMode,
 		"metricsBindAddress", metricsAddr,
 		"healthProbeBindAddress", probeAddr,
 		"leaderElection", enableLeaderElection,
@@ -122,6 +136,7 @@ func main() {
 		"phase3Metrics", true,
 		"phase4Metrics", true,
 		"phase5Metrics", true,
+		"phase6OperatorMode", string(operatorMode),
 		"resumeReadinessControllerName", resumeac.ControllerName,
 	)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {

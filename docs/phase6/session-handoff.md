@@ -224,11 +224,141 @@ respected:
 
 ---
 
+## Session 3: Operator Mode Split Implementation
+
+- Date: 2026-03-30
+
+### Decisions Made
+
+1. **Two modes only: `worker` (default) and `manager`.** A separate
+   "single" mode was considered but adds no behavioral difference over
+   worker mode. Worker covers both single-cluster and multi-cluster
+   worker deployments.
+
+2. **Mode is startup-time via `--mode` flag, fixed for process lifetime.**
+   Per-RTJ routing comes from `spec.managedBy`, not the mode flag.
+   The mode flag determines the process-wide role.
+
+3. **`ShouldSuppressRuntime` is the single predicate for mode branching.**
+   Returns true only when `mode == manager AND job.IsManagedByMultiKueue()`.
+   All other combinations follow the full Phase 5 path.
+
+4. **Manager mode preserves normal path for non-MultiKueue RTJs.**
+   Safety-first: if a non-MultiKueue RTJ exists on a manager cluster,
+   the full Phase 5 runtime path runs to prevent data loss.
+
+5. **Suppression check is positioned early in Reconcile.** After finalizer
+   management and status initialization but before `getActiveJobSet` and
+   all runtime path code. This ensures no runtime resources are ever
+   accidentally created for suppressed RTJs.
+
+6. **Manager-mode status uses existing MultiClusterStatus fields.**
+   Sets `localExecutionSuppressed=true`, `dispatchPhase=Pending`,
+   phase=`Queued`, reason=`LocalExecutionSuppressed`. No new API types.
+
+7. **Zero-value Mode field preserves pre-Phase 6 behavior.** Existing
+   tests and deployments work unchanged without setting `--mode`.
+
+8. **No MultiKueue configuration wired yet.** This session implements
+   the mode split only. MultiKueue external-framework protocol,
+   dispatch, and status mirroring are deferred.
+
+### Files Created / Modified (Session 3)
+
+- `internal/controller/mode.go` -- new file. `OperatorMode` type with
+  `ModeWorker` and `ModeManager` constants, `ParseOperatorMode` validator,
+  `ShouldSuppressRuntime` predicate with `multiKueueChecker` interface.
+
+- `internal/controller/mode_test.go` -- new file. 14 tests:
+  - `ParseOperatorMode` valid/invalid modes (3 tests)
+  - `ShouldSuppressRuntime` all four (mode, managedBy) combinations (4 tests)
+  - Manager mode suppresses runtime for MultiKueue RTJ (1 test)
+  - Manager mode allows normal path for non-MultiKueue RTJ (1 test)
+  - Worker mode launches runtime for MultiKueue RTJ (1 test)
+  - Single-cluster behavior unchanged (1 test)
+  - Manager mode suppresses even when unsuspended (1 test)
+  - Repeated reconcile is idempotent (1 test)
+  - Zero-value mode backward compat (1 test)
+
+- `internal/controller/resumabletrainingjob_controller.go` -- modified.
+  Added `Mode OperatorMode` field to `ResumableTrainingJobReconciler`.
+  Inserted `ShouldSuppressRuntime` check early in `Reconcile` that
+  branches to `reconcileManagerIntent`. Added `reconcileManagerIntent`
+  method.
+
+- `internal/controller/status_helpers.go` -- modified. Added
+  `markManagerSuppressed` helper that sets `MultiCluster` status fields
+  and `reasonLocalExecutionSuppressed` constant.
+
+- `cmd/operator/main.go` -- modified. Added `--mode` flag with default
+  `worker`, `ParseOperatorMode` validation at startup, `Mode` field
+  passed to reconciler, mode logged at startup.
+
+- `docs/phase6/operator-modes.md` -- new file. Documents mode semantics,
+  ownership split table, detection logic, backward compatibility,
+  configuration examples, test coverage, and design decisions.
+
+- `docs/phase6/session-handoff.md` -- this file (updated).
+
+### Tests Run
+
+- `go vet ./internal/controller/...` -- clean
+- `go vet ./cmd/operator/...` -- clean
+- `go test ./internal/controller/... -v` -- 87 tests pass (14 new + 73 existing)
+- `go test ./...` -- all packages pass:
+  - `api/v1alpha1` -- pass
+  - `internal/admissionchecks/resume` -- pass
+  - `internal/checkpoints` -- pass
+  - `internal/controller` -- pass
+  - `internal/jobset` -- pass
+  - `internal/kueue` -- pass
+  - `internal/policy/checkpointpriority` -- pass
+  - `internal/topology` -- pass
+  - `test/e2e` -- pass
+
+### Hard Boundary Verification
+
+| Boundary | Status |
+|---|---|
+| Manager must not create local child JobSets for MultiKueue-managed RTJs | Verified: `TestManagerModeSuppressesRuntimeForMultiKueueManagedRTJ`, `TestManagerModeDoesNotCreateJobSetEvenWhenUnsuspended` |
+| Worker must continue to own the real runtime path | Verified: `TestWorkerModeLaunchesRuntimeForMultiKueueManagedRTJ` |
+| Single-cluster behavior preserved when MultiKueue not in use | Verified: `TestSingleClusterBehaviorUnchangedWhenMultiKueueNotUsed` |
+| No accidental reintroduction of manager-local JobSets for remote jobs | Verified: all manager-mode tests assert `apierrors.IsNotFound` for child JobSets |
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | MultiKueue external-framework protocol for custom CRDs | Blocks G1 | Open -- must inspect Kueue v0.15.1 MultiKueue source |
+| OQ-2 | Pause propagation via MultiKueue | Blocks G3 | Open -- must inspect MultiKueue spec mutation propagation |
+| OQ-3 | Remote RTJ status visibility on the manager | Affects G4 | **Partially resolved:** API surface defined, `reconcileManagerIntent` populates manager-side status. Status mirroring from worker depends on OQ-1. |
+| OQ-4 | Manager-mode detection (all-or-nothing vs per-RTJ) | Affects G2 | **Resolved:** All-or-nothing `--mode` flag with per-RTJ `spec.managedBy` routing. Implemented in Session 3. |
+| OQ-5 | Shared checkpoint store credential distribution | Affects G3/G5 | Tentatively resolved: operational concern |
+| OQ-6 | MultiKueueCluster kubeconfig management in kind | Affects G5 | Open -- requires kind networking investigation |
+| OQ-7 | Kueue MultiKueue feature gate status in v0.15.1 | Affects isolation strategy | Open -- must inspect Kueue feature gates |
+| OQ-8 | Remote RTJ cleanup on manager-side deletion | Affects lifecycle correctness | Open -- must inspect MultiKueue deletion behavior |
+| OQ-9 | MultiKueue dispatch and Kueue preemption interaction | Affects preemption path | Open -- must inspect MultiKueue preemption handling |
+| OQ-10 | Phase 5 deferred items for Phase 6 | Minor worker-side improvements | Tentatively resolved: bundle with Phase 6 |
+
+### Divergence Notes
+
+No divergence from the mission statement. All hard boundaries are
+respected:
+- Manager does NOT create local child JobSets for MultiKueue-managed RTJs (tested).
+- Worker continues to own the real runtime path (tested).
+- Single-cluster Phase 5 behavior preserved when MultiKueue is not in use (tested).
+- Implementation is simple and explicit (two modes, one predicate, one early branch).
+- No MultiKueue configuration wired yet (deferred as requested).
+
+---
+
 ## Recommended Next Prompt
 
-The RTJ API is extended for MultiKueue. The recommended next session is:
+The operator mode split is implemented. The recommended next session is:
 
-### Session 3: MultiKueue Protocol Investigation
+### Session 4: MultiKueue Protocol Investigation
 
 **Goal:** Resolve OQ-1, OQ-2, OQ-3 (remaining), OQ-7, OQ-8, and OQ-9
 by inspecting the Kueue v0.15.1 source code for MultiKueue's

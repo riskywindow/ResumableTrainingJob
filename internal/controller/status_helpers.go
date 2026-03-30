@@ -461,6 +461,48 @@ func stringMapsEqual(left, right map[string]string) bool {
 	return true
 }
 
+// --- Phase 6: Manager-mode status helpers ---
+
+const (
+	reasonLocalExecutionSuppressed = "LocalExecutionSuppressed"
+)
+
+// markManagerSuppressed sets the MultiCluster status fields that indicate
+// this RTJ's local runtime execution has been suppressed because the
+// operator is running in manager mode and the RTJ is managed by MultiKueue.
+//
+// Returns true when any status field changed.
+func markManagerSuppressed(job *trainingv1alpha1.ResumableTrainingJob, now metav1.Time) bool {
+	changed := false
+
+	if job.Status.MultiCluster == nil {
+		job.Status.MultiCluster = &trainingv1alpha1.MultiClusterStatus{}
+		changed = true
+	}
+	mc := job.Status.MultiCluster
+
+	if !mc.LocalExecutionSuppressed {
+		mc.LocalExecutionSuppressed = true
+		changed = true
+	}
+
+	if mc.DispatchPhase == "" {
+		mc.DispatchPhase = trainingv1alpha1.DispatchPhasePending
+		changed = true
+	}
+
+	message := "Manager mode: local child JobSet creation is suppressed for this MultiKueue-managed RTJ. Runtime execution is delegated to a remote worker cluster."
+	if job.Status.SetPhase(trainingv1alpha1.PhaseQueued, reasonLocalExecutionSuppressed, message, now) {
+		changed = true
+	}
+
+	if job.Status.ObservedGeneration != job.Generation {
+		job.Status.ObservedGeneration = job.Generation
+		changed = true
+	}
+	return changed
+}
+
 // --- Phase 5: Telemetry lifecycle helpers ---
 //
 // These helpers layer Phase 5 telemetry recording on top of existing mark*
