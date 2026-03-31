@@ -136,6 +136,7 @@ func main() {
 		"phase3Metrics", true,
 		"phase4Metrics", true,
 		"phase5Metrics", true,
+		"phase6Metrics", true,
 		"phase6OperatorMode", string(operatorMode),
 		"resumeReadinessControllerName", resumeac.ControllerName,
 	)

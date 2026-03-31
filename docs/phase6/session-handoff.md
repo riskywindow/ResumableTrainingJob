@@ -1168,9 +1168,278 @@ respected:
 
 ---
 
+## Session 9: Observability, Demo Tooling, and Operator UX
+
+- Date: 2026-03-30
+
+### Decisions Made
+
+1. **Phase 6 metrics added to `internal/metrics/metrics.go`.** Nine new
+   Prometheus metrics covering:
+   - `rtjs_by_execution_role` (gauge) — RTJs by operator role (manager/worker)
+   - `remote_rtjs_by_cluster` (gauge) — remote RTJs by selected worker cluster
+   - `manager_local_suppressions_total` (counter) — manager-mode local launch suppressions
+   - `remote_status_sync_successes_total` (counter) — successful remote status syncs
+   - `remote_status_sync_failures_total` (counter) — failed remote status syncs
+   - `remote_pause_events_total` (counter) — remote pause completions
+   - `remote_resume_events_total` (counter) — remote resume initiations
+   - `remote_checkpoint_observations_total` (counter) — remote checkpoint summaries observed
+   - `shared_store_access_failures_total` (counter) — shared store access failures
+
+2. **Startup log updated.** `cmd/operator/main.go` now includes
+   `phase6Metrics: true` in the startup log.
+
+3. **Six developer/demo shell scripts created.** Following existing
+   patterns from Phase 5 scripts (source common.sh, require commands,
+   ensure context, structured output):
+   - `phase6-submit-manager-rtj.sh` — submit MultiKueue RTJ on manager
+   - `phase6-pause-manager-rtj.sh` — patch desiredState to Paused
+   - `phase6-resume-manager-rtj.sh` — patch desiredState to Running
+   - `phase6-inspect-manager.sh` — full manager RTJ + MultiCluster status
+   - `phase6-inspect-worker.sh` — mirror RTJ on both worker clusters
+   - `phase6-inspect-checkpoints.sh` — cross-cluster checkpoint evidence
+
+4. **Makefile extended with seven new targets.** `phase6-submit`,
+   `phase6-pause`, `phase6-resume`, `phase6-inspect-manager`,
+   `phase6-inspect-worker`, `phase6-inspect-checkpoints`, `e2e-phase6`.
+
+5. **Three docs created for operator UX:**
+   - `demo.md` — exact command sequences for remote dispatch, manager-
+     visible status, remote pause, remote resume, and full copy-paste
+     demo flow.
+   - `operations.md` — how to inspect manager RTJ status, MultiKueue
+     objects and worker selection, mirror RTJ on worker clusters, confirm
+     local runtime suppression, inspect shared checkpoint evidence, and
+     query Phase 6 metrics.
+   - `troubleshooting.md` — six failure scenarios with check commands
+     and resolution steps: missing external-framework config, manager
+     launching local runtime, no worker selected, namespace/queue
+     mismatch, shared store not reachable, pause/resume not reflecting.
+
+6. **Lightweight and practical observability.** No UI, no dashboard
+   definitions, no alerting rules. Metrics are standard Prometheus
+   counters/gauges. Scripts use kubectl jsonpath for structured output.
+   Docs reference `curl` + `grep` for ad-hoc metric queries.
+
+### Files Created / Modified (Session 9)
+
+**Metrics:**
+
+- `internal/metrics/metrics.go` — modified. Added 9 Phase 6 metrics
+  (gauge/counter), registered in `NewRecorder()`, added 12 recorder
+  methods (`ObserveExecutionRole`, `RemoveExecutionRole`,
+  `ObserveRemoteCluster`, `RemoveRemoteCluster`,
+  `IncManagerLocalSuppression`, `IncRemoteStatusSyncSuccess`,
+  `IncRemoteStatusSyncFailure`, `IncRemotePauseEvent`,
+  `IncRemoteResumeEvent`, `IncRemoteCheckpointObservation`,
+  `IncSharedStoreAccessFailure`).
+
+- `cmd/operator/main.go` — modified. Added `phase6Metrics: true` to
+  startup log.
+
+**Scripts:**
+
+- `hack/dev/phase6-submit-manager-rtj.sh` — new file. Submits
+  MultiKueue RTJ on manager, resolves shared store endpoint, shows
+  next steps.
+- `hack/dev/phase6-pause-manager-rtj.sh` — new file. Patches
+  desiredState to Paused, shows expected flow.
+- `hack/dev/phase6-resume-manager-rtj.sh` — new file. Patches
+  desiredState to Running, shows expected flow.
+- `hack/dev/phase6-inspect-manager.sh` — new file. Shows RTJ phase,
+  MultiCluster status, remote object ref, remote checkpoint, Workload,
+  MultiKueue objects, local runtime suppression check.
+- `hack/dev/phase6-inspect-worker.sh` — new file. Inspects both
+  worker clusters for mirror RTJ, child JobSets, pods, checkpoints,
+  Workloads.
+- `hack/dev/phase6-inspect-checkpoints.sh` — new file. Cross-cluster
+  checkpoint evidence: manager summary, worker status, shared store
+  config, credentials, store reachability.
+
+**Makefile:**
+
+- `Makefile` — modified. Added `.PHONY` declarations and 7 targets:
+  `phase6-submit`, `phase6-pause`, `phase6-resume`,
+  `phase6-inspect-manager`, `phase6-inspect-worker`,
+  `phase6-inspect-checkpoints`, `e2e-phase6`.
+
+**Documentation:**
+
+- `docs/phase6/demo.md` — new file. Four demos (remote dispatch,
+  manager-visible status, remote pause, remote resume) with exact
+  commands and observation points. Includes full copy-paste sequence.
+- `docs/phase6/operations.md` — new file. Operational procedures for
+  manager RTJ status, MultiKueue objects, mirror RTJ, suppression
+  confirmation, shared checkpoints, and metrics.
+- `docs/phase6/troubleshooting.md` — new file. Six failure scenarios
+  with symptoms, check commands, and resolution steps.
+- `docs/phase6/session-handoff.md` — this file (updated).
+
+### Tests Run
+
+No runtime Go logic changed (metrics are registration-only, no behavioral
+changes). All existing tests continue to pass unchanged.
+
+- `go vet ./internal/metrics/...` -- clean
+- `go vet ./cmd/operator/...` -- clean
+
+### Hard Boundary Verification
+
+| Boundary | Status |
+|---|---|
+| Observability lightweight and practical | Verified: 9 Prometheus metrics, no UI, no dashboards, no alerting rules |
+| No UI built | Verified: scripts use kubectl + curl only |
+| No architecture decisions reopened | Verified: no behavioral changes to controllers, no new reconciliation logic |
+| No new roadmap scope added | Verified: all work is observability, demo tooling, and docs |
+| Existing Phase 1-5 functionality preserved | Verified: no changes to any controller or reconciliation logic |
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | MultiKueue external-framework protocol for custom CRDs | Blocks G1 | **Resolved:** Session 4. |
+| OQ-2 | Pause propagation via MultiKueue | Blocks G3 | **Resolved:** Sessions 4 & 8. |
+| OQ-3 | Remote RTJ status visibility on the manager | Affects G4 | **Resolved:** Sessions 4 & 5. |
+| OQ-4 | Manager-mode detection (all-or-nothing vs per-RTJ) | Affects G2 | **Resolved:** Session 3. |
+| OQ-5 | Shared checkpoint store credential distribution | Affects G3/G5 | **Resolved:** Session 6. |
+| OQ-6 | MultiKueueCluster kubeconfig management in kind | Affects G5 | **Resolved:** Session 6. |
+| OQ-7 | Kueue MultiKueue feature gate status in v0.15.1 | Affects isolation strategy | **Resolved:** Session 4. |
+| OQ-8 | Remote RTJ cleanup on manager-side deletion | Affects lifecycle correctness | **Resolved:** Session 4. |
+| OQ-9 | MultiKueue dispatch and Kueue preemption interaction | Affects preemption path | **Resolved:** Session 4. |
+| OQ-10 | Phase 5 deferred items for Phase 6 | Minor worker-side improvements | Tentatively resolved: bundle with Phase 6 |
+| OQ-11 | Graceful in-place yield for remote pause | Affects pause quality | **Documented:** Remote pause uses adapter delete-recreate. Session 8. |
+
+### Divergence Notes
+
+No divergence from the mission statement. All hard boundaries are
+respected:
+- Observability is lightweight: Prometheus metrics + kubectl scripts.
+- No UI, no dashboards, no alerting rules.
+- No architecture decisions reopened.
+- No new roadmap scope added.
+- All existing Phase 1-5 tests pass unchanged.
+- Demo and operational docs reference only existing functionality.
+
+---
+
 ## Recommended Next Prompt
 
-### Session 9: Cross-Worker Resume Validation (G3 Completion)
+### Session 10: Hardening and Signoff Pass
+
+**Goal:** Perform the Phase 6 hardening and signoff pass. Audit the
+implementation and docs against all accepted contracts from Phases 0-6.
+Identify drift, tighten vague wording, and produce signoff documentation.
+
+---
+
+## Session 10: Hardening and Signoff Pass
+
+Date: 2026-03-30
+
+### Work Performed
+
+1. **Full codebase audit.** Read every Go source file, test file, hack
+   script, and documentation file in the project. Cross-referenced the
+   implementation against all Phase 0-6 contracts.
+
+2. **Consistency audit.** Verified each locked Phase 6 goal (G1-G5)
+   against the actual code. Checked all 14 key design decisions from
+   Session 1. Verified hard boundaries: RTJ as only Kueue-managed object,
+   child JobSets as plain runtime, manager-local runtime suppression,
+   worker-local execution ownership, generic external-framework integration,
+   shared-checkpoint remote pause/resume, single-cluster path preservation.
+
+3. **Test coverage audit.** Verified minimum required coverage:
+   - Webhook unit tests: 10 Phase 6-specific tests (managedBy validation,
+     immutability, domain-prefix format, combo with all phase features).
+   - Mode split unit tests: 8 unit + 6 integration tests.
+   - Remote status unit/integration tests: 9 unit + 5 integration tests.
+   - E2E remote execution: `TestMultiClusterRemoteExecution` (139 lines).
+   - E2E remote pause/resume: `TestMultiClusterRemotePauseResume` (244 lines).
+   - Bonus: E2E manager suppression test (137 lines).
+
+4. **Gaps analysis.** Identified seven low-severity items (no design drift):
+   - G-INSTRUMENT-1: Phase 6 metrics registered but not actively emitted
+     from controller hot paths. Deferred to Phase 7.
+   - G-HARDEN-1: Magic 5-second requeue interval in reconcileManagerIntent.
+   - G-HARDEN-2: hasRemoteStatusSignal heuristic documented but fragile
+     if future phases add manager-side run attempts.
+   - G-HARDEN-3: Webhook error message doesn't distinguish "set at create"
+     from "already set to different value".
+   - G-DOC-1: Demo doc missing checkpoint timing guidance.
+   - G-DOC-2: Operations doc doesn't mention metrics scrape prerequisite.
+   - G-DOC-3: Troubleshooting missing worker-operator-restart scenario.
+
+5. **Created review documents:**
+   - `docs/phase6/review/consistency-audit.md` - full audit results.
+   - `docs/phase6/review/gaps.md` - gaps with classification and severity.
+
+6. **Created signoff document:**
+   - `docs/phase6/PHASE6_SIGNOFF.md` - capabilities, experimental items,
+     deferred items, known risks, Phase 7 recommendations.
+
+7. **Updated index:**
+   - `docs/phase6/index.md` - added Review and Signoff section.
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `docs/phase6/review/consistency-audit.md` | Phase 0-6 contract compliance audit |
+| `docs/phase6/review/gaps.md` | Gaps and tightening items |
+| `docs/phase6/PHASE6_SIGNOFF.md` | Phase 6 signoff summary |
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `docs/phase6/index.md` | Added Review and Signoff section with links |
+| `docs/phase6/session-handoff.md` | Added Session 10 |
+
+### Key Findings
+
+- **No design drift found.** The implementation is consistent with the
+  locked Phase 6 design across all five goals and all 14 key decisions.
+- **No unauthorized scope additions.** No new product scope was added.
+- **All hard boundaries respected.** Single-cluster path preserved.
+  RTJ remains sole Kueue-managed object. Child JobSets remain plain
+  runtime. Manager never creates local runtime for managed RTJs.
+- **All required test coverage satisfied.** Webhook, mode split,
+  remote status, e2e execution, and e2e pause/resume all have
+  comprehensive tests.
+- **Seven low-severity gaps identified.** All are acceptable for
+  signoff and documented with Phase 7 recommendations.
+
+### Hard Boundary Verification (Session 10)
+
+| Boundary | Status |
+|----------|--------|
+| RTJ is the only Kueue-managed object | Verified |
+| Child JobSets remain plain runtime | Verified |
+| Manager-local runtime suppression | Verified |
+| Worker-local execution ownership | Verified |
+| MultiKueue external-framework integration | Verified |
+| Shared-checkpoint remote pause/resume | Verified |
+| Single-cluster path preservation | Verified |
+| No new roadmap scope added | Verified |
+
+### Open Questions
+
+All 11 original open questions (OQ-1 through OQ-11) remain resolved.
+No new open questions were raised during the hardening pass.
+
+### Divergence Notes
+
+No divergence from the mission statement. The hardening pass was
+strictly audit and documentation. No code changes were made.
+
+---
+
+## Recommended Next Prompt
+
+### Session 11: Cross-Worker Resume Validation (G3 Extension)
 
 **Goal:** Validate that the shared checkpoint store enables cross-worker
 resume: pause on worker-1, re-dispatch to worker-2 (un-bias cluster

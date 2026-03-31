@@ -37,6 +37,9 @@ PHASE6_TRAINER_IMAGE ?= $(PHASE5_TRAINER_IMAGE)
 .PHONY: phase5-inspect-priority phase5-inspect-policy phase5-inspect-workload phase5-inspect-checkpoints
 .PHONY: e2e-phase5
 .PHONY: phase6-up phase6-down phase6-status phase6-load-images phase6-smoke
+.PHONY: phase6-submit phase6-pause phase6-resume
+.PHONY: phase6-inspect-manager phase6-inspect-worker phase6-inspect-checkpoints
+.PHONY: e2e-phase6
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -492,3 +495,57 @@ phase6-smoke:
 	  PHASE6_WORKER_2=$(PHASE6_WORKER_2) \
 	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
 	  ./hack/dev/phase6-smoke.sh
+
+# ── Phase 6 demo / inspect targets ─────────────────────────────────
+#
+# phase6-submit:              Submit a MultiKueue-managed RTJ on the manager.
+# phase6-pause:               Pause the remote RTJ (manager patches desiredState).
+# phase6-resume:              Resume the remote RTJ (manager patches desiredState).
+# phase6-inspect-manager:     Inspect RTJ dispatch + MultiCluster status on manager.
+# phase6-inspect-worker:      Inspect the mirror RTJ on worker clusters.
+# phase6-inspect-checkpoints: Inspect shared checkpoint evidence across clusters.
+# e2e-phase6:                 Run Phase 6 e2e tests (requires three kind clusters).
+
+phase6-submit:
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_WORKER_1=$(PHASE6_WORKER_1) \
+	  PHASE6_RTJ_NAME=$(PHASE6_RTJ_NAME) \
+	  PHASE6_TRAINER_IMAGE=$(PHASE6_TRAINER_IMAGE) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/phase6-submit-manager-rtj.sh
+
+phase6-pause:
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_RTJ_NAME=$(PHASE6_RTJ_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/phase6-pause-manager-rtj.sh
+
+phase6-resume:
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_RTJ_NAME=$(PHASE6_RTJ_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/phase6-resume-manager-rtj.sh
+
+phase6-inspect-manager:
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_RTJ_NAME=$(PHASE6_RTJ_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/phase6-inspect-manager.sh
+
+phase6-inspect-worker:
+	PHASE6_WORKER_1=$(PHASE6_WORKER_1) \
+	  PHASE6_WORKER_2=$(PHASE6_WORKER_2) \
+	  PHASE6_RTJ_NAME=$(PHASE6_RTJ_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/phase6-inspect-worker.sh
+
+phase6-inspect-checkpoints:
+	PHASE6_MANAGER=$(PHASE6_MANAGER) \
+	  PHASE6_WORKER_1=$(PHASE6_WORKER_1) \
+	  PHASE6_WORKER_2=$(PHASE6_WORKER_2) \
+	  PHASE6_RTJ_NAME=$(PHASE6_RTJ_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/phase6-inspect-checkpoints.sh
+
+e2e-phase6:
+	RUN_KIND_E2E=1 PHASE6_TRAINER_IMAGE=$(PHASE6_TRAINER_IMAGE) go test ./test/e2e -run 'TestMultiCluster' -v -timeout 30m

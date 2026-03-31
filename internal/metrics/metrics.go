@@ -380,6 +380,82 @@ var (
 			Help:      "Total resumes where checkpoint and restore world sizes differed.",
 		},
 	)
+
+	// Phase 6 metrics.
+	rtjsByExecutionRole = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "rtjs_by_execution_role",
+			Help:      "Current ResumableTrainingJobs by operator execution role (manager or worker).",
+		},
+		[]string{"role"},
+	)
+	remoteRTJsByCluster = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "remote_rtjs_by_cluster",
+			Help:      "Current MultiKueue-dispatched RTJs by selected worker cluster.",
+		},
+		[]string{"cluster"},
+	)
+	managerLocalSuppressions = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "manager_local_suppressions_total",
+			Help:      "Total times the manager suppressed local child JobSet creation for a MultiKueue-managed RTJ.",
+		},
+	)
+	remoteStatusSyncSuccesses = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "remote_status_sync_successes_total",
+			Help:      "Total successful remote status syncs from worker to manager.",
+		},
+	)
+	remoteStatusSyncFailures = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "remote_status_sync_failures_total",
+			Help:      "Total failed remote status sync attempts.",
+		},
+	)
+	remotePauseEvents = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "remote_pause_events_total",
+			Help:      "Total remote pause events completed on the manager.",
+		},
+	)
+	remoteResumeEvents = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "remote_resume_events_total",
+			Help:      "Total remote resume events initiated on the manager.",
+		},
+	)
+	remoteCheckpointObservations = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "remote_checkpoint_observations_total",
+			Help:      "Total remote checkpoint summaries observed by the manager from worker status.",
+		},
+	)
+	sharedStoreAccessFailures = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "shared_store_access_failures_total",
+			Help:      "Total failures accessing the shared checkpoint store.",
+		},
+	)
 )
 
 func NewRecorder() *Recorder {
@@ -430,6 +506,16 @@ func NewRecorder() *Recorder {
 			partialAdmissionLaunches,
 			sameSizeResumes,
 			differentSizeResumes,
+			// Phase 6
+			rtjsByExecutionRole,
+			remoteRTJsByCluster,
+			managerLocalSuppressions,
+			remoteStatusSyncSuccesses,
+			remoteStatusSyncFailures,
+			remotePauseEvents,
+			remoteResumeEvents,
+			remoteCheckpointObservations,
+			sharedStoreAccessFailures,
 		)
 		recorder = &Recorder{
 			phases:    map[string]string{},
@@ -787,5 +873,84 @@ func (r *Recorder) IncYieldBlockedByBudget() {
 func (r *Recorder) IncYieldBlockedByCooldown() {
 	if r != nil {
 		yieldsBlockedByCooldown.Inc()
+	}
+}
+
+// Phase 6 recorder methods.
+
+// ObserveExecutionRole tracks the current RTJ's execution role (manager or worker).
+func (r *Recorder) ObserveExecutionRole(role string) {
+	if r != nil && role != "" {
+		rtjsByExecutionRole.WithLabelValues(role).Inc()
+	}
+}
+
+// RemoveExecutionRole decrements the execution role gauge.
+func (r *Recorder) RemoveExecutionRole(role string) {
+	if r != nil && role != "" {
+		rtjsByExecutionRole.WithLabelValues(role).Dec()
+	}
+}
+
+// ObserveRemoteCluster tracks a remote RTJ assigned to a specific worker cluster.
+func (r *Recorder) ObserveRemoteCluster(cluster string) {
+	if r != nil && cluster != "" {
+		remoteRTJsByCluster.WithLabelValues(cluster).Inc()
+	}
+}
+
+// RemoveRemoteCluster decrements the remote cluster gauge.
+func (r *Recorder) RemoveRemoteCluster(cluster string) {
+	if r != nil && cluster != "" {
+		remoteRTJsByCluster.WithLabelValues(cluster).Dec()
+	}
+}
+
+// IncManagerLocalSuppression records a manager-mode local launch suppression.
+func (r *Recorder) IncManagerLocalSuppression() {
+	if r != nil {
+		managerLocalSuppressions.Inc()
+	}
+}
+
+// IncRemoteStatusSyncSuccess records a successful remote status sync.
+func (r *Recorder) IncRemoteStatusSyncSuccess() {
+	if r != nil {
+		remoteStatusSyncSuccesses.Inc()
+	}
+}
+
+// IncRemoteStatusSyncFailure records a failed remote status sync.
+func (r *Recorder) IncRemoteStatusSyncFailure() {
+	if r != nil {
+		remoteStatusSyncFailures.Inc()
+	}
+}
+
+// IncRemotePauseEvent records a remote pause completion.
+func (r *Recorder) IncRemotePauseEvent() {
+	if r != nil {
+		remotePauseEvents.Inc()
+	}
+}
+
+// IncRemoteResumeEvent records a remote resume initiation.
+func (r *Recorder) IncRemoteResumeEvent() {
+	if r != nil {
+		remoteResumeEvents.Inc()
+	}
+}
+
+// IncRemoteCheckpointObservation records a remote checkpoint summary observation.
+func (r *Recorder) IncRemoteCheckpointObservation() {
+	if r != nil {
+		remoteCheckpointObservations.Inc()
+	}
+}
+
+// IncSharedStoreAccessFailure records a shared checkpoint store access failure.
+func (r *Recorder) IncSharedStoreAccessFailure() {
+	if r != nil {
+		sharedStoreAccessFailures.Inc()
 	}
 }
