@@ -148,6 +148,122 @@ const (
 	ReadinessGateRejected ReadinessGateState = "Rejected"
 )
 
+// LaunchGateState describes the aggregate launch gate evaluation state.
+// +kubebuilder:validation:Enum=Open;Blocked;Unknown
+type LaunchGateState string
+
+const (
+	// LaunchGateOpen means all launch prerequisites are satisfied and the
+	// controller may render the child JobSet.
+	LaunchGateOpen LaunchGateState = "Open"
+
+	// LaunchGateBlocked means one or more launch prerequisites are not yet
+	// satisfied. The controller must not render the child JobSet.
+	LaunchGateBlocked LaunchGateState = "Blocked"
+
+	// LaunchGateUnknown means the gate state could not be determined.
+	LaunchGateUnknown LaunchGateState = "Unknown"
+)
+
+// ProvisioningState describes the state of the ProvisioningRequest
+// AdmissionCheck gate for this RTJ.
+// +kubebuilder:validation:Enum=NotConfigured;Pending;Provisioned;Failed
+type ProvisioningState string
+
+const (
+	// ProvisioningNotConfigured means no ProvisioningRequest AdmissionCheck
+	// is configured on the ClusterQueue. Phase 6 behavior preserved.
+	ProvisioningNotConfigured ProvisioningState = "NotConfigured"
+
+	// ProvisioningPending means a ProvisioningRequest has been created by
+	// Kueue but the backend has not yet satisfied it.
+	ProvisioningPending ProvisioningState = "Pending"
+
+	// ProvisioningProvisioned means the ProvisioningRequest backend has
+	// confirmed that physical capacity is available.
+	ProvisioningProvisioned ProvisioningState = "Provisioned"
+
+	// ProvisioningFailed means the ProvisioningRequest backend has rejected
+	// the provisioning request.
+	ProvisioningFailed ProvisioningState = "Failed"
+)
+
+// StartupState describes the startup/recovery lifecycle of the child runtime.
+// +kubebuilder:validation:Enum=NotStarted;Starting;Running;StartupTimedOut;RecoveryTimedOut;Evicted
+type StartupState string
+
+const (
+	// StartupNotStarted means no child runtime has been launched yet.
+	StartupNotStarted StartupState = "NotStarted"
+
+	// StartupStarting means the child runtime has been launched but pods
+	// have not yet reached Ready.
+	StartupStarting StartupState = "Starting"
+
+	// StartupRunning means the child runtime pods are Ready.
+	StartupRunning StartupState = "Running"
+
+	// StartupTimedOut means the child runtime pods did not reach Ready
+	// within the waitForPodsReady startup timeout.
+	StartupTimedOut StartupState = "StartupTimedOut"
+
+	// StartupRecoveryTimedOut means the child runtime pods lost Ready state
+	// and did not recover within the waitForPodsReady recovery window.
+	StartupRecoveryTimedOut StartupState = "RecoveryTimedOut"
+
+	// StartupEvicted means the workload was evicted by Kueue
+	// (startup or recovery timeout).
+	StartupEvicted StartupState = "Evicted"
+)
+
+// PodsReadyState describes the pod readiness state derivable from the child
+// runtime. This is a controller-derived summary, not a direct Kueue field.
+// +kubebuilder:validation:Enum=Unknown;PodsReady;PodsNotReady;NoRuntime
+type PodsReadyState string
+
+const (
+	// PodsReadyUnknown means the pod readiness state has not been determined.
+	PodsReadyUnknown PodsReadyState = "Unknown"
+
+	// PodsReady means all expected worker pods are in Ready condition.
+	PodsReady PodsReadyState = "PodsReady"
+
+	// PodsNotReady means one or more expected worker pods are not Ready.
+	PodsNotReady PodsReadyState = "PodsNotReady"
+
+	// PodsReadyNoRuntime means there is no active child runtime to evaluate.
+	PodsReadyNoRuntime PodsReadyState = "NoRuntime"
+)
+
+// AdmissionCheckState describes the state of a single admission check.
+// +kubebuilder:validation:Enum=Pending;Ready;Retry;Rejected
+type AdmissionCheckState string
+
+const (
+	AdmissionCheckPending  AdmissionCheckState = "Pending"
+	AdmissionCheckReady    AdmissionCheckState = "Ready"
+	AdmissionCheckRetry    AdmissionCheckState = "Retry"
+	AdmissionCheckRejected AdmissionCheckState = "Rejected"
+)
+
+// TopologyGateState describes whether topology assignment is satisfied.
+// +kubebuilder:validation:Enum=NotConfigured;Pending;Assigned
+type TopologyGateState string
+
+const (
+	// TopologyGateNotConfigured means topology-aware scheduling is not
+	// enabled (Phase 3 behavior).
+	TopologyGateNotConfigured TopologyGateState = "NotConfigured"
+
+	// TopologyGatePending means topology is configured but assignment is
+	// not yet present on the Workload.
+	TopologyGatePending TopologyGateState = "Pending"
+
+	// TopologyGateAssigned means topology assignment is present on the
+	// Workload and ready for rendering.
+	TopologyGateAssigned TopologyGateState = "Assigned"
+)
+
 // MultiClusterDispatchPhase describes the high-level multi-cluster dispatch lifecycle.
 // +kubebuilder:validation:Enum=Pending;Dispatched;Active
 type MultiClusterDispatchPhase string
@@ -440,6 +556,34 @@ type ResumableTrainingJobStatus struct {
 	// +optional
 	PriorityShaping *PriorityShapingStatus `json:"priorityShaping,omitempty"`
 
+	// LaunchGate captures the aggregate launch gate evaluation state.
+	// The launch gate determines when the controller may render the child
+	// JobSet. Nil before the first admission attempt.
+	// All fields are controller-owned.
+	// +optional
+	LaunchGate *LaunchGateStatus `json:"launchGate,omitempty"`
+
+	// Provisioning captures the state of the ProvisioningRequest
+	// AdmissionCheck gate. Nil when no ProvisioningRequest AC is configured
+	// or when the controller has not yet evaluated the gate.
+	// All fields are controller-owned.
+	// +optional
+	Provisioning *ProvisioningStatus `json:"provisioning,omitempty"`
+
+	// StartupRecovery captures the startup and recovery lifecycle state
+	// of the child runtime, including eviction reasons from
+	// waitForPodsReady. Nil before the first launch attempt.
+	// All fields are controller-owned.
+	// +optional
+	StartupRecovery *StartupRecoveryStatus `json:"startupRecovery,omitempty"`
+
+	// Capacity captures whether a physical capacity guarantee is active
+	// for this RTJ. This is a derived indicator computed from admission
+	// and provisioning state. Nil before first evaluation.
+	// All fields are controller-owned.
+	// +optional
+	Capacity *CapacityStatus `json:"capacity,omitempty"`
+
 	// MultiCluster captures the manager-side view of multi-cluster dispatch.
 	// Populated only when the RTJ is managed by MultiKueue (spec.managedBy is
 	// set to the MultiKueue controller value). Nil in single-cluster mode.
@@ -557,6 +701,142 @@ type EffectiveLaunchShape struct {
 	// Empty on first launch (no checkpoint to restore).
 	// +optional
 	SelectedCheckpointID string `json:"selectedCheckpointID,omitempty"`
+}
+
+// LaunchGateStatus captures the aggregate launch gate evaluation state.
+// The launch gate is the decision point where the RTJ operator transitions
+// from Admitted to Starting and renders the child JobSet.
+type LaunchGateStatus struct {
+	// State is the aggregate launch gate state.
+	// Open: all prerequisites satisfied, child JobSet may be rendered.
+	// Blocked: one or more prerequisites not satisfied.
+	// Unknown: gate state could not be determined.
+	// +optional
+	State LaunchGateState `json:"launchGateState,omitempty"`
+
+	// Reason is a machine-readable reason for the current gate state.
+	// Examples: "AllChecksPassed", "AdmissionCheckPending",
+	// "TopologyNotAssigned", "Suspended".
+	// +optional
+	Reason string `json:"launchGateReason,omitempty"`
+
+	// Message is a human-readable explanation of the current gate state.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// AdmissionCheckSummary summarizes the state of all AdmissionChecks
+	// on the Workload. Each entry maps the check name to its state.
+	// Empty when no AdmissionChecks are configured (Phase 6 fail-open).
+	// +optional
+	AdmissionCheckSummary map[string]AdmissionCheckState `json:"admissionCheckSummary,omitempty"`
+
+	// TopologyGateState describes whether the topology assignment
+	// prerequisite is satisfied. NotConfigured when topology is disabled.
+	// +optional
+	TopologyGateState TopologyGateState `json:"topologyGateState,omitempty"`
+
+	// LastTransitionTime is when the launch gate state last changed.
+	// +optional
+	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
+}
+
+// ProvisioningStatus captures the state of the ProvisioningRequest
+// AdmissionCheck gate for this RTJ. Derived from the Workload's
+// AdmissionCheck state, not from ProvisioningRequest resources directly.
+type ProvisioningStatus struct {
+	// State is the current provisioning gate state.
+	// NotConfigured: no ProvisioningRequest AC on the ClusterQueue.
+	// Pending: ProvisioningRequest created, backend processing.
+	// Provisioned: backend confirmed physical capacity available.
+	// Failed: backend rejected the provisioning request.
+	// +optional
+	State ProvisioningState `json:"provisioningState,omitempty"`
+
+	// ProvisioningRequestRef is a reference to the ProvisioningRequest
+	// resource created by Kueue for this workload. Nil when provisioning
+	// is not configured or the request has not been created yet.
+	// +optional
+	ProvisioningRequestRef *ProvisioningRequestReference `json:"provisioningRequestRef,omitempty"`
+
+	// Attempt is the number of provisioning attempts observed.
+	// Incremented each time the workload is re-admitted and a new
+	// ProvisioningRequest cycle begins.
+	// +optional
+	Attempt int32 `json:"provisioningAttempt,omitempty"`
+
+	// Reason is a machine-readable reason for the current state.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Message is a human-readable explanation of the current state.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// LastTransitionTime is when the provisioning state last changed.
+	// +optional
+	LastTransitionTime *metav1.Time `json:"provisioningLastTransitionTime,omitempty"`
+}
+
+// ProvisioningRequestReference identifies the ProvisioningRequest resource
+// created by Kueue for this workload's provisioning gate.
+type ProvisioningRequestReference struct {
+	// Name is the name of the ProvisioningRequest.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Namespace is the namespace of the ProvisioningRequest.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// StartupRecoveryStatus captures the startup and recovery lifecycle of the
+// child runtime. Integrates with Kueue's waitForPodsReady eviction signals.
+type StartupRecoveryStatus struct {
+	// StartupState is the current startup/recovery state.
+	// +optional
+	StartupState StartupState `json:"startupState,omitempty"`
+
+	// PodsReadyState is the derived pod readiness indicator.
+	// +optional
+	PodsReadyState PodsReadyState `json:"podsReadyState,omitempty"`
+
+	// LastLaunchFailureReason is the machine-readable reason for the most
+	// recent launch failure (e.g., "ImagePullBackOff", "Unschedulable").
+	// Empty when no launch failure has occurred.
+	// +optional
+	LastLaunchFailureReason string `json:"lastLaunchFailureReason,omitempty"`
+
+	// LastEvictionReason is the machine-readable reason for the most recent
+	// Kueue eviction (e.g., "PodsReadyTimeout", "Preempted",
+	// "InactiveWorkload"). Empty when no eviction has occurred.
+	// +optional
+	LastEvictionReason string `json:"lastEvictionReason,omitempty"`
+
+	// LastRequeueReason is the machine-readable reason for the most recent
+	// requeue after eviction. Empty when no requeue has occurred.
+	// +optional
+	LastRequeueReason string `json:"lastRequeueReason,omitempty"`
+
+	// LastTransitionTime is when the startup state last changed.
+	// +optional
+	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
+}
+
+// CapacityStatus is a derived indicator summarizing whether a physical
+// capacity guarantee is active for this RTJ. Computed from admission
+// and provisioning state.
+type CapacityStatus struct {
+	// GuaranteeActive is true when the RTJ has been admitted with a
+	// ProvisioningRequest that has been satisfied, meaning physical
+	// capacity (not just quota) has been confirmed for this workload.
+	// False when provisioning is not configured or not yet satisfied.
+	GuaranteeActive bool `json:"guaranteeActive"`
+
+	// Reason is a machine-readable reason for the current state.
+	// Examples: "ProvisioningSatisfied", "QuotaOnlyAdmission",
+	// "ProvisioningPending", "NotAdmitted".
+	// +optional
+	Reason string `json:"reason,omitempty"`
 }
 
 // MultiClusterStatus captures the manager-side view of multi-cluster dispatch.
@@ -1188,6 +1468,30 @@ func (g ReadinessGateState) String() string {
 
 func (d MultiClusterDispatchPhase) String() string {
 	return string(d)
+}
+
+func (s LaunchGateState) String() string {
+	return string(s)
+}
+
+func (s ProvisioningState) String() string {
+	return string(s)
+}
+
+func (s StartupState) String() string {
+	return string(s)
+}
+
+func (s PodsReadyState) String() string {
+	return string(s)
+}
+
+func (s TopologyGateState) String() string {
+	return string(s)
+}
+
+func (s AdmissionCheckState) String() string {
+	return string(s)
 }
 
 func (r ResumableTrainingJob) String() string {
