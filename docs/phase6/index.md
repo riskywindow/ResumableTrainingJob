@@ -47,6 +47,18 @@ Build on Phase 5's checkpoint-aware priority shaping to:
 
 - [e2e.md](e2e.md) - Phase 6 e2e test coverage: remote dispatch/execution, manager suppression, deterministic cluster selection, deferred items
 
+### Operations and Observability
+
+- [demo.md](demo.md) - demo command sequences: remote dispatch, manager-visible status, remote pause, remote resume
+- [operations.md](operations.md) - operational procedures: inspecting manager/worker RTJs, MultiKueue objects, checkpoint evidence, metrics
+- [troubleshooting.md](troubleshooting.md) - failure scenarios: missing config, local launch, no worker, namespace mismatch, shared store, pause/resume
+
+### Review and Signoff
+
+- [PHASE6_SIGNOFF.md](PHASE6_SIGNOFF.md) - Phase 6 signoff: capabilities, experimental items, deferred items, risks, Phase 7 recommendations
+- [review/consistency-audit.md](review/consistency-audit.md) - audit of implementation against Phases 0-6 contracts, goal-by-goal verification, test coverage audit
+- [review/gaps.md](review/gaps.md) - gaps and tightening items: metrics instrumentation, code hygiene, documentation improvements
+
 ### Tracking
 
 - [open-questions.md](open-questions.md) - unresolved questions with resolution plans
