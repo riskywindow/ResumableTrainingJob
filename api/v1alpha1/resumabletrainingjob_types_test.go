@@ -760,6 +760,284 @@ func TestValidateManagedByAcceptsValidValues(t *testing.T) {
 	}
 }
 
+// --- Phase 7 backward-compatibility and deep copy tests ---
+
+func TestPhase6SpecDecodesWithoutPhase7StatusFields(t *testing.T) {
+	job := minimalValidRTJ()
+	job.Default()
+	now := metav1.Now()
+	job.InitializePhase1Status(metav1.NewTime(now.Time))
+
+	// Phase 6 status has no Phase 7 sections.
+	if job.Status.LaunchGate != nil {
+		t.Fatalf("expected nil launchGate for Phase 6 status")
+	}
+	if job.Status.Provisioning != nil {
+		t.Fatalf("expected nil provisioning for Phase 6 status")
+	}
+	if job.Status.StartupRecovery != nil {
+		t.Fatalf("expected nil startupRecovery for Phase 6 status")
+	}
+	if job.Status.Capacity != nil {
+		t.Fatalf("expected nil capacity for Phase 6 status")
+	}
+}
+
+func TestPhase6SpecValidatesUnchangedForPhase7(t *testing.T) {
+	// A full Phase 6 spec with all prior optional features should still pass.
+	job := minimalValidRTJ()
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{Name: "default-shaping"}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Default()
+
+	if err := job.ValidateCreate(); err != nil {
+		t.Fatalf("expected Phase 6 spec to pass validation unchanged for Phase 7, got %v", err)
+	}
+}
+
+func TestDeepCopyLaunchGateStatus(t *testing.T) {
+	now := metav1.Now()
+	orig := &LaunchGateStatus{
+		State:   LaunchGateBlocked,
+		Reason:  "AdmissionCheckPending",
+		Message: "Waiting for ProvisioningRequest AC",
+		AdmissionCheckSummary: map[string]AdmissionCheckState{
+			"provisioning-check": AdmissionCheckPending,
+			"resume-readiness":   AdmissionCheckReady,
+		},
+		TopologyGateState:  TopologyGatePending,
+		LastTransitionTime: &now,
+	}
+
+	cp := orig.DeepCopy()
+
+	if cp.State != LaunchGateBlocked {
+		t.Fatalf("expected state Blocked, got %s", cp.State)
+	}
+	if cp.Reason != "AdmissionCheckPending" {
+		t.Fatalf("expected reason AdmissionCheckPending, got %s", cp.Reason)
+	}
+	if len(cp.AdmissionCheckSummary) != 2 {
+		t.Fatalf("expected 2 admission checks, got %d", len(cp.AdmissionCheckSummary))
+	}
+	if cp.AdmissionCheckSummary["provisioning-check"] != AdmissionCheckPending {
+		t.Fatalf("expected provisioning-check Pending, got %s", cp.AdmissionCheckSummary["provisioning-check"])
+	}
+	if cp.TopologyGateState != TopologyGatePending {
+		t.Fatalf("expected topologyGateState Pending, got %s", cp.TopologyGateState)
+	}
+
+	// Verify independence.
+	cp.AdmissionCheckSummary["provisioning-check"] = AdmissionCheckReady
+	if orig.AdmissionCheckSummary["provisioning-check"] != AdmissionCheckPending {
+		t.Fatalf("mutating copy affected original admissionCheckSummary")
+	}
+}
+
+func TestDeepCopyProvisioningStatus(t *testing.T) {
+	now := metav1.Now()
+	orig := &ProvisioningStatus{
+		State: ProvisioningPending,
+		ProvisioningRequestRef: &ProvisioningRequestReference{
+			Name:      "prov-req-1",
+			Namespace: "default",
+		},
+		Attempt:            2,
+		Reason:             "WaitingForBackend",
+		Message:            "Backend is processing",
+		LastTransitionTime: &now,
+	}
+
+	cp := orig.DeepCopy()
+
+	if cp.State != ProvisioningPending {
+		t.Fatalf("expected state Pending, got %s", cp.State)
+	}
+	if cp.ProvisioningRequestRef == nil || cp.ProvisioningRequestRef.Name != "prov-req-1" {
+		t.Fatalf("expected provisioningRequestRef with name prov-req-1")
+	}
+	if cp.Attempt != 2 {
+		t.Fatalf("expected attempt 2, got %d", cp.Attempt)
+	}
+
+	// Verify independence.
+	cp.ProvisioningRequestRef.Name = "prov-req-99"
+	if orig.ProvisioningRequestRef.Name != "prov-req-1" {
+		t.Fatalf("mutating copy affected original provisioningRequestRef")
+	}
+}
+
+func TestDeepCopyStartupRecoveryStatus(t *testing.T) {
+	now := metav1.Now()
+	orig := &StartupRecoveryStatus{
+		StartupState:           StartupTimedOut,
+		PodsReadyState:         PodsNotReady,
+		LastLaunchFailureReason: "ImagePullBackOff",
+		LastEvictionReason:      "PodsReadyTimeout",
+		LastRequeueReason:       "Eviction",
+		LastTransitionTime:      &now,
+	}
+
+	cp := orig.DeepCopy()
+
+	if cp.StartupState != StartupTimedOut {
+		t.Fatalf("expected startupState StartupTimedOut, got %s", cp.StartupState)
+	}
+	if cp.PodsReadyState != PodsNotReady {
+		t.Fatalf("expected podsReadyState PodsNotReady, got %s", cp.PodsReadyState)
+	}
+	if cp.LastLaunchFailureReason != "ImagePullBackOff" {
+		t.Fatalf("expected lastLaunchFailureReason ImagePullBackOff, got %s", cp.LastLaunchFailureReason)
+	}
+	if cp.LastEvictionReason != "PodsReadyTimeout" {
+		t.Fatalf("expected lastEvictionReason PodsReadyTimeout, got %s", cp.LastEvictionReason)
+	}
+	if cp.LastRequeueReason != "Eviction" {
+		t.Fatalf("expected lastRequeueReason Eviction, got %s", cp.LastRequeueReason)
+	}
+}
+
+func TestDeepCopyCapacityStatus(t *testing.T) {
+	orig := &CapacityStatus{
+		GuaranteeActive: true,
+		Reason:          "ProvisioningSatisfied",
+	}
+
+	cp := orig.DeepCopy()
+
+	if !cp.GuaranteeActive {
+		t.Fatalf("expected guaranteeActive true")
+	}
+	if cp.Reason != "ProvisioningSatisfied" {
+		t.Fatalf("expected reason ProvisioningSatisfied, got %s", cp.Reason)
+	}
+
+	// Verify independence.
+	cp.GuaranteeActive = false
+	if !orig.GuaranteeActive {
+		t.Fatalf("mutating copy affected original")
+	}
+}
+
+func TestDeepCopyRTJWithPhase7Fields(t *testing.T) {
+	now := metav1.Now()
+	job := minimalValidRTJ()
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Status.LaunchGate = &LaunchGateStatus{
+		State:  LaunchGateOpen,
+		Reason: "AllChecksPassed",
+		AdmissionCheckSummary: map[string]AdmissionCheckState{
+			"provisioning-check": AdmissionCheckReady,
+		},
+		TopologyGateState:  TopologyGateAssigned,
+		LastTransitionTime: &now,
+	}
+	job.Status.Provisioning = &ProvisioningStatus{
+		State: ProvisioningProvisioned,
+		ProvisioningRequestRef: &ProvisioningRequestReference{
+			Name:      "prov-req-1",
+			Namespace: "default",
+		},
+		Attempt:            1,
+		LastTransitionTime: &now,
+	}
+	job.Status.StartupRecovery = &StartupRecoveryStatus{
+		StartupState:   StartupRunning,
+		PodsReadyState: PodsReady,
+	}
+	job.Status.Capacity = &CapacityStatus{
+		GuaranteeActive: true,
+		Reason:          "ProvisioningSatisfied",
+	}
+
+	cp := job.DeepCopy()
+
+	if cp.Status.LaunchGate == nil {
+		t.Fatalf("expected launchGate to be preserved in deep copy")
+	}
+	if cp.Status.LaunchGate.State != LaunchGateOpen {
+		t.Fatalf("expected launchGateState Open, got %s", cp.Status.LaunchGate.State)
+	}
+	if cp.Status.Provisioning == nil {
+		t.Fatalf("expected provisioning to be preserved in deep copy")
+	}
+	if cp.Status.Provisioning.State != ProvisioningProvisioned {
+		t.Fatalf("expected provisioningState Provisioned, got %s", cp.Status.Provisioning.State)
+	}
+	if cp.Status.StartupRecovery == nil {
+		t.Fatalf("expected startupRecovery to be preserved in deep copy")
+	}
+	if cp.Status.StartupRecovery.StartupState != StartupRunning {
+		t.Fatalf("expected startupState Running, got %s", cp.Status.StartupRecovery.StartupState)
+	}
+	if cp.Status.Capacity == nil {
+		t.Fatalf("expected capacity to be preserved in deep copy")
+	}
+	if !cp.Status.Capacity.GuaranteeActive {
+		t.Fatalf("expected guaranteeActive true")
+	}
+
+	// Verify independence.
+	cp.Status.LaunchGate.AdmissionCheckSummary["provisioning-check"] = AdmissionCheckPending
+	if job.Status.LaunchGate.AdmissionCheckSummary["provisioning-check"] != AdmissionCheckReady {
+		t.Fatalf("deep copy not independent for launchGate")
+	}
+	cp.Status.Provisioning.ProvisioningRequestRef.Name = "other"
+	if job.Status.Provisioning.ProvisioningRequestRef.Name != "prov-req-1" {
+		t.Fatalf("deep copy not independent for provisioning")
+	}
+}
+
+func TestControllerOwnedPhase7StatusFieldsPreservedOnSpecUpdate(t *testing.T) {
+	// Simulate a controller that has set Phase 7 status fields.
+	// A spec-only update should not affect these controller-owned fields.
+	now := metav1.Now()
+	job := minimalValidRTJ()
+	job.Default()
+	job.InitializePhase1Status(metav1.NewTime(now.Time))
+
+	// Controller sets Phase 7 status.
+	job.Status.LaunchGate = &LaunchGateStatus{
+		State:  LaunchGateBlocked,
+		Reason: "AdmissionCheckPending",
+	}
+	job.Status.Provisioning = &ProvisioningStatus{
+		State:   ProvisioningPending,
+		Attempt: 1,
+	}
+	job.Status.StartupRecovery = &StartupRecoveryStatus{
+		StartupState:   StartupNotStarted,
+		PodsReadyState: PodsReadyNoRuntime,
+	}
+	job.Status.Capacity = &CapacityStatus{
+		GuaranteeActive: false,
+		Reason:          "ProvisioningPending",
+	}
+
+	// Simulate a spec-only update (user changes desiredState).
+	updated := job.DeepCopy()
+	updated.Spec.Control.DesiredState = DesiredStatePaused
+	updated.Default()
+
+	// Status fields must be preserved.
+	if updated.Status.LaunchGate == nil || updated.Status.LaunchGate.State != LaunchGateBlocked {
+		t.Fatalf("expected launchGate to be preserved after spec update")
+	}
+	if updated.Status.Provisioning == nil || updated.Status.Provisioning.State != ProvisioningPending {
+		t.Fatalf("expected provisioning to be preserved after spec update")
+	}
+	if updated.Status.StartupRecovery == nil || updated.Status.StartupRecovery.StartupState != StartupNotStarted {
+		t.Fatalf("expected startupRecovery to be preserved after spec update")
+	}
+	if updated.Status.Capacity == nil || updated.Status.Capacity.GuaranteeActive {
+		t.Fatalf("expected capacity to be preserved after spec update")
+	}
+}
+
 func minimalValidRTJ() *ResumableTrainingJob {
 	return &ResumableTrainingJob{
 		ObjectMeta: metav1.ObjectMeta{

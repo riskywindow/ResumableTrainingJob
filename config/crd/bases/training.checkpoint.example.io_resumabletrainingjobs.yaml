@@ -592,6 +592,157 @@ spec:
                     appliedPolicyRef:
                       description: Name of the CheckpointPriorityPolicy last used to compute effective priority.
                       type: string
+                # Phase 7: launch gate status
+                launchGate:
+                  description: >-
+                    Aggregate launch gate evaluation state. Determines when the
+                    controller may render the child JobSet. All fields are
+                    controller-owned. Nil before the first admission attempt.
+                  type: object
+                  properties:
+                    launchGateState:
+                      description: >-
+                        Aggregate launch gate state: Open, Blocked, or Unknown.
+                      type: string
+                      enum:
+                        - Open
+                        - Blocked
+                        - Unknown
+                    launchGateReason:
+                      description: Machine-readable reason for the current gate state.
+                      type: string
+                    message:
+                      description: Human-readable explanation of the current gate state.
+                      type: string
+                    admissionCheckSummary:
+                      description: >-
+                        Maps admission check name to its state. Empty when no
+                        AdmissionChecks are configured (Phase 6 fail-open).
+                      type: object
+                      additionalProperties:
+                        type: string
+                        enum:
+                          - Pending
+                          - Ready
+                          - Retry
+                          - Rejected
+                    topologyGateState:
+                      description: >-
+                        Whether the topology assignment prerequisite is satisfied.
+                      type: string
+                      enum:
+                        - NotConfigured
+                        - Pending
+                        - Assigned
+                    lastTransitionTime:
+                      description: When the launch gate state last changed.
+                      type: string
+                      format: date-time
+                # Phase 7: provisioning status
+                provisioning:
+                  description: >-
+                    State of the ProvisioningRequest AdmissionCheck gate.
+                    Derived from Workload AdmissionCheck state. All fields are
+                    controller-owned. Nil when not configured or not yet evaluated.
+                  type: object
+                  properties:
+                    provisioningState:
+                      description: >-
+                        Current provisioning gate state.
+                      type: string
+                      enum:
+                        - NotConfigured
+                        - Pending
+                        - Provisioned
+                        - Failed
+                    provisioningRequestRef:
+                      description: >-
+                        Reference to the ProvisioningRequest resource created by
+                        Kueue for this workload.
+                      type: object
+                      required:
+                        - name
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                        namespace:
+                          type: string
+                    provisioningAttempt:
+                      description: >-
+                        Number of provisioning attempts observed.
+                      type: integer
+                      format: int32
+                    reason:
+                      description: Machine-readable reason for the current state.
+                      type: string
+                    message:
+                      description: Human-readable explanation of the current state.
+                      type: string
+                    provisioningLastTransitionTime:
+                      description: When the provisioning state last changed.
+                      type: string
+                      format: date-time
+                # Phase 7: startup/recovery status
+                startupRecovery:
+                  description: >-
+                    Startup and recovery lifecycle state of the child runtime.
+                    Integrates with Kueue waitForPodsReady eviction signals.
+                    All fields are controller-owned. Nil before the first launch.
+                  type: object
+                  properties:
+                    startupState:
+                      description: Current startup/recovery state.
+                      type: string
+                      enum:
+                        - NotStarted
+                        - Starting
+                        - Running
+                        - StartupTimedOut
+                        - RecoveryTimedOut
+                        - Evicted
+                    podsReadyState:
+                      description: Derived pod readiness indicator.
+                      type: string
+                      enum:
+                        - Unknown
+                        - PodsReady
+                        - PodsNotReady
+                        - NoRuntime
+                    lastLaunchFailureReason:
+                      description: >-
+                        Machine-readable reason for the most recent launch failure.
+                      type: string
+                    lastEvictionReason:
+                      description: >-
+                        Machine-readable reason for the most recent Kueue eviction.
+                      type: string
+                    lastRequeueReason:
+                      description: >-
+                        Machine-readable reason for the most recent requeue.
+                      type: string
+                    lastTransitionTime:
+                      description: When the startup state last changed.
+                      type: string
+                      format: date-time
+                # Phase 7: capacity status
+                capacity:
+                  description: >-
+                    Derived indicator of whether a physical capacity guarantee
+                    is active. Computed from admission and provisioning state.
+                    All fields are controller-owned. Nil before first evaluation.
+                  type: object
+                  required:
+                    - guaranteeActive
+                  properties:
+                    guaranteeActive:
+                      description: >-
+                        True when physical capacity (not just quota) has been
+                        confirmed via a satisfied ProvisioningRequest.
+                      type: boolean
+                    reason:
+                      description: Machine-readable reason for the current state.
+                      type: string
                 # Phase 6: multi-cluster status
                 multiCluster:
                   description: >-

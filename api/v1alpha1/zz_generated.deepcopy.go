@@ -200,6 +200,97 @@ func (in *RemoteCheckpointSummary) DeepCopy() *RemoteCheckpointSummary {
 	return out
 }
 
+// --- Phase 7 deep copy ---
+
+func (in *LaunchGateStatus) DeepCopyInto(out *LaunchGateStatus) {
+	*out = *in
+	if in.AdmissionCheckSummary != nil {
+		in, out := &in.AdmissionCheckSummary, &out.AdmissionCheckSummary
+		*out = make(map[string]AdmissionCheckState, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
+	if in.LastTransitionTime != nil {
+		in, out := &in.LastTransitionTime, &out.LastTransitionTime
+		*out = (*in).DeepCopy()
+	}
+}
+
+func (in *LaunchGateStatus) DeepCopy() *LaunchGateStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(LaunchGateStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ProvisioningStatus) DeepCopyInto(out *ProvisioningStatus) {
+	*out = *in
+	if in.ProvisioningRequestRef != nil {
+		in, out := &in.ProvisioningRequestRef, &out.ProvisioningRequestRef
+		*out = new(ProvisioningRequestReference)
+		**out = **in
+	}
+	if in.LastTransitionTime != nil {
+		in, out := &in.LastTransitionTime, &out.LastTransitionTime
+		*out = (*in).DeepCopy()
+	}
+}
+
+func (in *ProvisioningStatus) DeepCopy() *ProvisioningStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(ProvisioningStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ProvisioningRequestReference) DeepCopyInto(out *ProvisioningRequestReference) {
+	*out = *in
+}
+
+func (in *ProvisioningRequestReference) DeepCopy() *ProvisioningRequestReference {
+	if in == nil {
+		return nil
+	}
+	out := new(ProvisioningRequestReference)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *StartupRecoveryStatus) DeepCopyInto(out *StartupRecoveryStatus) {
+	*out = *in
+	if in.LastTransitionTime != nil {
+		in, out := &in.LastTransitionTime, &out.LastTransitionTime
+		*out = (*in).DeepCopy()
+	}
+}
+
+func (in *StartupRecoveryStatus) DeepCopy() *StartupRecoveryStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(StartupRecoveryStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *CapacityStatus) DeepCopyInto(out *CapacityStatus) {
+	*out = *in
+}
+
+func (in *CapacityStatus) DeepCopy() *CapacityStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(CapacityStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
 func (in *LaunchReadinessStatus) DeepCopyInto(out *LaunchReadinessStatus) {
 	*out = *in
 	if in.LastTransitionTime != nil {
@@ -547,6 +638,26 @@ func (in *ResumableTrainingJobStatus) DeepCopyInto(out *ResumableTrainingJobStat
 		in, out := &in.PriorityShaping, &out.PriorityShaping
 		*out = new(PriorityShapingStatus)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.LaunchGate != nil {
+		in, out := &in.LaunchGate, &out.LaunchGate
+		*out = new(LaunchGateStatus)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.Provisioning != nil {
+		in, out := &in.Provisioning, &out.Provisioning
+		*out = new(ProvisioningStatus)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.StartupRecovery != nil {
+		in, out := &in.StartupRecovery, &out.StartupRecovery
+		*out = new(StartupRecoveryStatus)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.Capacity != nil {
+		in, out := &in.Capacity, &out.Capacity
+		*out = new(CapacityStatus)
+		**out = **in
 	}
 	if in.MultiCluster != nil {
 		in, out := &in.MultiCluster, &out.MultiCluster

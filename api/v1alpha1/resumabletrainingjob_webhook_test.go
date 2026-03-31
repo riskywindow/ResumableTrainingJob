@@ -903,6 +903,135 @@ func TestIsManagedByMultiKueue(t *testing.T) {
 	}
 }
 
+// --- Phase 7 webhook tests: backward compatibility ---
+
+func TestWebhookDefaultPreservesPhase6SpecForPhase7(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// A Phase 6 spec with all features should pass defaulting unchanged.
+	job := minimalValidRTJ()
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{Name: "default-shaping"}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	// No Phase 7 spec additions should appear.
+	if job.Spec.ManagedBy != MultiKueueControllerName {
+		t.Fatalf("expected managedBy to be preserved")
+	}
+}
+
+func TestWebhookValidateCreateAcceptsPhase6ManifestForPhase7(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Full Phase 6 spec with all optional features enabled.
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		PodSetName:             "trainer",
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{
+		Name: "aggressive-shaping",
+	}
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected full Phase 6 spec to pass Phase 7 validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateUpdatePreservesPhase7StatusFields(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	oldJob := minimalValidRTJ()
+	oldJob.Spec.Suspend = ptr.To(true)
+	oldJob.Default()
+
+	// Simulate controller setting Phase 7 status.
+	oldJob.Status.LaunchGate = &LaunchGateStatus{
+		State:  LaunchGateBlocked,
+		Reason: "AdmissionCheckPending",
+	}
+	oldJob.Status.Provisioning = &ProvisioningStatus{
+		State:   ProvisioningPending,
+		Attempt: 1,
+	}
+
+	newJob := oldJob.DeepCopy()
+	// User-only change: update desiredState.
+	newJob.Spec.Control.DesiredState = DesiredStatePaused
+
+	if _, err := wh.ValidateUpdate(context.Background(), oldJob, newJob); err != nil {
+		t.Fatalf("expected update with Phase 7 status to succeed, got %v", err)
+	}
+
+	// Status fields are not cleared by webhook validation.
+	if newJob.Status.LaunchGate == nil || newJob.Status.LaunchGate.State != LaunchGateBlocked {
+		t.Fatalf("expected launchGate status to be preserved through webhook")
+	}
+	if newJob.Status.Provisioning == nil || newJob.Status.Provisioning.State != ProvisioningPending {
+		t.Fatalf("expected provisioning status to be preserved through webhook")
+	}
+}
+
+func TestWebhookDefaultDoesNotInjectPhase7Status(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	// Defaulting must NOT inject Phase 7 status fields.
+	if job.Status.LaunchGate != nil {
+		t.Fatalf("webhook defaulting must not inject launchGate status")
+	}
+	if job.Status.Provisioning != nil {
+		t.Fatalf("webhook defaulting must not inject provisioning status")
+	}
+	if job.Status.StartupRecovery != nil {
+		t.Fatalf("webhook defaulting must not inject startupRecovery status")
+	}
+	if job.Status.Capacity != nil {
+		t.Fatalf("webhook defaulting must not inject capacity status")
+	}
+}
+
 func webhookTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
