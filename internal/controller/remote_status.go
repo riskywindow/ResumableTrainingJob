@@ -34,10 +34,12 @@ const (
 	reasonRemoteDispatched     = "RemoteDispatched"
 	reasonRemotePending        = "RemotePending"
 	reasonRemoteStatusUnknown  = "RemoteStatusUnknown"
+	reasonRemotePauseComplete  = "RemotePauseComplete"
 
-	messageRemoteActive    = "Remote worker cluster is executing this RTJ; status is mirrored from the worker."
+	messageRemoteActive     = "Remote worker cluster is executing this RTJ; status is mirrored from the worker."
 	messageRemoteDispatched = "RTJ has been dispatched to a worker cluster; waiting for the worker to initialize."
-	messageRemotePending   = "Manager mode: waiting for MultiKueue to dispatch this RTJ to a worker cluster."
+	messageRemotePending    = "Manager mode: waiting for MultiKueue to dispatch this RTJ to a worker cluster."
+	messageRemotePaused     = "Remote RTJ execution has been paused. Checkpoint preserved in shared store for cross-worker resume."
 )
 
 // syncRemoteStatus populates the MultiClusterStatus fields on a manager-
@@ -203,4 +205,100 @@ func remoteCheckpointSummaryEqual(a, b *trainingv1alpha1.RemoteCheckpointSummary
 	return a.LastCompletedCheckpointID == b.LastCompletedCheckpointID &&
 		a.StorageURI == b.StorageURI &&
 		timesEqual(a.LastCompletedCheckpointTime, b.LastCompletedCheckpointTime)
+}
+
+// -------------------------------------------------------------------------
+// Remote pause / resume helpers
+// -------------------------------------------------------------------------
+//
+// When the user patches spec.control.desiredState to Paused on a manager-
+// side MultiKueue-managed RTJ, the Kueue generic adapter detects the spec
+// drift and tears down the remote copy (delete + recreate with the updated
+// spec). The new remote RTJ enters the worker's manual-hold path
+// (PendingPaused). The manager controller must:
+//
+//  1. Preserve the last known remote checkpoint summary before the
+//     adapter overwrites status with the fresh remote RTJ's empty status.
+//  2. Mark the manager-side phase as Paused once the remote is no longer
+//     active (the adapter has completed the teardown).
+//
+// For resume: the user patches desiredState back to Running. The adapter
+// sees another spec drift, tears down the Paused remote, and creates a
+// new Running remote. The worker resumes from the shared checkpoint store.
+
+// isRemotePauseRequested returns true when the user has requested pause
+// on the manager-side RTJ.
+func isRemotePauseRequested(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return job.Spec.Control != nil &&
+		job.Spec.Control.DesiredState == trainingv1alpha1.DesiredStatePaused
+}
+
+// markRemotePaused sets the manager-side RTJ phase to Paused and updates
+// the multiCluster.remotePhase to reflect the pause. This is called when
+// the remote RTJ has been torn down (no active remote signal) and the
+// user has requested pause.
+//
+// Returns true when any status field changed.
+func markRemotePaused(job *trainingv1alpha1.ResumableTrainingJob, now metav1.Time) bool {
+	changed := false
+
+	if job.Status.SetPhase(trainingv1alpha1.PhasePaused, reasonRemotePauseComplete, messageRemotePaused, now) {
+		changed = true
+	}
+
+	if job.Status.MultiCluster == nil {
+		job.Status.MultiCluster = &trainingv1alpha1.MultiClusterStatus{}
+		changed = true
+	}
+	mc := job.Status.MultiCluster
+
+	if mc.RemotePhase != trainingv1alpha1.PhasePaused {
+		mc.RemotePhase = trainingv1alpha1.PhasePaused
+		changed = true
+	}
+
+	if !mc.LocalExecutionSuppressed {
+		mc.LocalExecutionSuppressed = true
+		changed = true
+	}
+
+	if job.Status.ObservedGeneration != job.Generation {
+		job.Status.ObservedGeneration = job.Generation
+		changed = true
+	}
+	return changed
+}
+
+// preserveRemoteCheckpoint captures the current RemoteCheckpointSummary
+// so it can be restored after syncRemoteStatus potentially clears it
+// (due to the adapter mirroring fresh status from a recreated remote RTJ).
+// Returns nil if there is nothing to preserve.
+func preserveRemoteCheckpoint(job *trainingv1alpha1.ResumableTrainingJob) *trainingv1alpha1.RemoteCheckpointSummary {
+	if job.Status.MultiCluster == nil || job.Status.MultiCluster.RemoteCheckpoint == nil {
+		return nil
+	}
+	cp := *job.Status.MultiCluster.RemoteCheckpoint
+	return &cp
+}
+
+// restoreRemoteCheckpoint re-applies a previously preserved checkpoint
+// summary if syncRemoteStatus cleared it. Returns true when the summary
+// was restored.
+func restoreRemoteCheckpoint(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	preserved *trainingv1alpha1.RemoteCheckpointSummary,
+) bool {
+	if preserved == nil {
+		return false
+	}
+	if job.Status.MultiCluster == nil {
+		job.Status.MultiCluster = &trainingv1alpha1.MultiClusterStatus{}
+	}
+	if job.Status.MultiCluster.RemoteCheckpoint != nil {
+		// syncRemoteStatus already populated it from the new remote;
+		// do not overwrite.
+		return false
+	}
+	job.Status.MultiCluster.RemoteCheckpoint = preserved
+	return true
 }

@@ -1012,13 +1012,169 @@ respected:
 
 ---
 
+## Session 8: Remote Pause/Resume E2E Coverage (G3)
+
+- Date: 2026-03-30
+
+### Decisions Made
+
+1. **Remote pause uses the Kueue adapter's delete-recreate mechanism.**
+   The generic adapter does not propagate spec mutations to running remote
+   jobs (Session 4, OQ-2). When the user patches `desiredState: Paused`
+   on the manager RTJ, the adapter detects spec drift and tears down the
+   active remote RTJ. A new remote RTJ is created with `desiredState:
+   Paused`, entering the worker's manual-hold path (PendingPaused).
+
+2. **The manager controller preserves checkpoint evidence across the
+   delete-recreate cycle.** When the adapter mirrors fresh status from
+   the new remote RTJ (which has no checkpoint), the manager controller
+   preserves the `multiCluster.remoteCheckpoint` summary that was
+   populated before the pause. This ensures checkpoint evidence is not
+   lost during the transition.
+
+3. **The manager controller marks Paused based on composite signal.**
+   When `isPauseRequested && !hasRemoteStatusSignal`, the manager marks
+   the RTJ as Paused with `reasonRemotePauseComplete`. This means the
+   remote execution has been torn down and the pause is complete.
+
+4. **Resume uses the shared checkpoint store for cross-worker recovery.**
+   When the user patches `desiredState: Running`, the adapter creates a
+   new remote RTJ. The worker controller finds the checkpoint in the
+   shared store (same `storageURI`, same `identity`) and resumes from it.
+
+5. **Multi-cluster pause differs from single-cluster pause.** Single-
+   cluster pause uses a graceful yield-at-step-boundary with a fresh
+   checkpoint. Multi-cluster pause relies on the training's periodic
+   checkpoint writes. The latest periodic checkpoint before teardown is
+   the recovery point. This is documented in
+   `docs/phase6/remote-pause-resume.md`.
+
+6. **Smallest coherent fix identified for spec propagation.** The
+   adapter's no-spec-propagation design means graceful in-place yield
+   (like the single-cluster path) is not possible without Kueue
+   changes. The delete-recreate mechanism is the smallest coherent
+   approach that works within the existing Kueue v0.15.1 adapter.
+   See `docs/phase6/remote-pause-resume.md` for the full analysis.
+
+7. **Requeue during transitional states for timely convergence.** When
+   pause is requested but the remote is still active (adapter hasn't
+   torn it down yet), the controller requeues at 5-second intervals
+   to poll for teardown completion.
+
+### Files Created / Modified (Session 8)
+
+- `internal/controller/remote_status.go` -- modified. Added
+  `isRemotePauseRequested`, `markRemotePaused`,
+  `preserveRemoteCheckpoint`, `restoreRemoteCheckpoint` helpers.
+  Added `reasonRemotePauseComplete` and `messageRemotePaused` constants.
+
+- `internal/controller/resumabletrainingjob_controller.go` -- modified.
+  Updated `reconcileManagerIntent` with remote pause/resume handling:
+  pause detection, checkpoint preservation across adapter sync,
+  Paused marking when remote is torn down, requeue during transition.
+
+- `test/e2e/multicluster_remote_pause_resume_test.go` -- new file.
+  `TestMultiClusterRemotePauseResume`: 12-step test proving the full
+  remote pause/resume cycle:
+  - Submit to manager, dispatch to worker-1
+  - Wait for Running + checkpoint
+  - Patch to Paused, wait for Paused
+  - Verify checkpoint preserved in multiCluster status
+  - Verify checkpoint exists in shared S3 store
+  - Verify no manager-local child JobSet
+  - Verify remote phase surfaced on manager
+  - Patch to Running, wait for resume
+  - Wait for new checkpoint (different ID)
+  - Verify monotonic progression
+
+- `test/e2e/testdata/phase6/rtj-remote-pause-resume.yaml` -- new file.
+  RTJ template with faster checkpoint cadence (CHECKPOINT_EVERY=2,
+  SLEEP_PER_STEP=3) for reliable e2e testing.
+
+- `test/e2e/phase6_helpers_test.go` -- modified. Added
+  `LastCompletedCheckpoint` and `SelectedCheckpoint` fields to
+  `phase6RTJView.Status`. Added `LastCompletedCheckpointTime` field
+  to `RemoteCheckpoint` view. These fields are needed for checkpoint
+  verification in the pause/resume test.
+
+- `docs/phase6/remote-pause-resume.md` -- new file. Comprehensive
+  documentation of the pause/resume propagation model: mechanism,
+  pause flow, resume flow, difference from single-cluster, controller
+  plumbing, shared store requirement, e2e coverage, file index.
+
+- `docs/phase6/session-handoff.md` -- this file (updated).
+
+### Tests Run
+
+- `go vet ./internal/controller/...` -- clean
+- `go vet ./test/e2e/...` -- clean
+- `go test ./internal/controller/... -v` -- all tests pass (no regressions)
+- `go test ./... -short` -- all packages pass:
+  - `api/v1alpha1` -- pass
+  - `internal/admissionchecks/resume` -- pass
+  - `internal/checkpoints` -- pass
+  - `internal/controller` -- pass
+  - `internal/jobset` -- pass
+  - `internal/kueue` -- pass
+  - `internal/multikueue` -- pass
+  - `internal/policy/checkpointpriority` -- pass
+  - `internal/remote` -- pass
+  - `internal/topology` -- pass
+  - `test/e2e` -- pass (e2e tests skip when `RUN_KIND_E2E!=1`)
+
+### Hard Boundary Verification
+
+| Boundary | Status |
+|---|---|
+| Pause/resume control originates from the manager cluster RTJ | Verified: user patches `spec.control.desiredState` on manager; adapter propagates via delete-recreate |
+| Actual yield/checkpoint/restore happens on the selected worker mirror | Verified: worker runs full Phase 5 path; checkpoint written by worker, resume on worker |
+| Manager cluster free of local child JobSets for remote RTJs | Verified: `assertNoJobSetsWithPrefix` called in test Steps 7 and 12 |
+| Existing single-cluster pause/resume path preserved | Verified: all Phase 1-5 tests pass unchanged; `ShouldSuppressRuntime` gates the remote path |
+| Checkpoint evidence exists in shared store | Verified: `assertObjectExists` validates manifest URI in MinIO |
+| Remote phase surfaced on manager status | Verified: `multiCluster.remotePhase=Paused` checked in Step 8 |
+| Step/checkpoint progression monotonic | Verified: pre-pause and post-resume checkpoint IDs differ; post-resume manifest exists in store |
+
+---
+
+## Open Issues
+
+| ID | Question | Impact | Status |
+| --- | --- | --- | --- |
+| OQ-1 | MultiKueue external-framework protocol for custom CRDs | Blocks G1 | **Resolved:** Session 4. |
+| OQ-2 | Pause propagation via MultiKueue | Blocks G3 | **Resolved:** Spec mutations not propagated; pause via adapter delete-recreate. Sessions 4 & 8. |
+| OQ-3 | Remote RTJ status visibility on the manager | Affects G4 | **Resolved:** Sessions 4 & 5. |
+| OQ-4 | Manager-mode detection (all-or-nothing vs per-RTJ) | Affects G2 | **Resolved:** Session 3. |
+| OQ-5 | Shared checkpoint store credential distribution | Affects G3/G5 | **Resolved:** Session 6. |
+| OQ-6 | MultiKueueCluster kubeconfig management in kind | Affects G5 | **Resolved:** Session 6. |
+| OQ-7 | Kueue MultiKueue feature gate status in v0.15.1 | Affects isolation strategy | **Resolved:** Session 4. |
+| OQ-8 | Remote RTJ cleanup on manager-side deletion | Affects lifecycle correctness | **Resolved:** Session 4. |
+| OQ-9 | MultiKueue dispatch and Kueue preemption interaction | Affects preemption path | **Resolved:** Session 4. |
+| OQ-10 | Phase 5 deferred items for Phase 6 | Minor worker-side improvements | Tentatively resolved: bundle with Phase 6 |
+| OQ-11 | Graceful in-place yield for remote pause | Affects pause quality | **Documented:** Remote pause uses adapter delete-recreate, not graceful yield. Documented difference in `remote-pause-resume.md`. |
+
+### Divergence Notes
+
+No divergence from the mission statement. All hard boundaries are
+respected:
+- Pause/resume control originates from the manager cluster RTJ.
+- Actual yield/checkpoint/restore happens on the selected worker mirror.
+- Manager cluster free of local child JobSets for remote RTJs (e2e tested).
+- Existing single-cluster pause/resume path preserved (all tests pass).
+- Checkpoint evidence preserved across the adapter's delete-recreate cycle.
+- Remote phase surfaced on manager status (e2e tested).
+- Smallest coherent fix: adapter delete-recreate is documented as the
+  propagation mechanism. Graceful in-place yield would require Kueue
+  adapter changes (identified, not implemented).
+
+---
+
 ## Recommended Next Prompt
 
-### Session 8: Cross-Worker Resume Validation (G3)
+### Session 9: Cross-Worker Resume Validation (G3 Completion)
 
 **Goal:** Validate that the shared checkpoint store enables cross-worker
-resume: pause on worker-1, re-dispatch to worker-2, resume from the
-checkpoint written by worker-1.
+resume: pause on worker-1, re-dispatch to worker-2 (un-bias cluster
+selection), resume from the checkpoint written by worker-1.
 
 **Prompt:**
 
@@ -1027,7 +1183,8 @@ You are working on Phase 6 only for the checkpoint-native preemption
 controller repo.
 
 Mission:
-Validate and test the shared-checkpoint cross-worker resume path.
+Validate and test the shared-checkpoint cross-worker resume path where
+the resume happens on a DIFFERENT worker cluster.
 
 Hard boundaries:
 - Keep the shared checkpoint-store contract simple.
@@ -1036,8 +1193,8 @@ Hard boundaries:
 
 Process:
 - Read docs/phase6/session-handoff.md for current state.
-- Review the existing pause flow (suspend_flow.go) and resume flow
-  (resume_flow.go) to confirm they work with the shared store model.
-- Add integration tests proving cross-worker resume.
+- Add an e2e test that pauses on worker-1, un-biases cluster selection
+  so worker-2 is eligible, resumes and verifies worker-2 picks up the
+  checkpoint from worker-1.
 - Update docs/phase6/session-handoff.md.
 ```

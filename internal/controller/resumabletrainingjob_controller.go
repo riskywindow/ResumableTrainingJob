@@ -301,6 +301,14 @@ func (r *ResumableTrainingJobReconciler) failLaunch(
 // Phase 6 Session 5: the manager now detects when the Kueue generic adapter
 // has mirrored remote status and populates MultiClusterStatus with the
 // execution cluster, remote phase, and remote checkpoint summary.
+//
+// Phase 6 Session 8: the manager now handles remote pause/resume propagation.
+// When the user patches spec.control.desiredState to Paused, the adapter's
+// delete-recreate cycle tears down the active remote RTJ. The manager
+// preserves the last known checkpoint summary and marks the RTJ as Paused
+// once the remote is no longer active. For resume, the adapter creates a
+// new remote RTJ with desiredState=Running, and the worker resumes from the
+// shared checkpoint store.
 func (r *ResumableTrainingJobReconciler) reconcileManagerIntent(
 	ctx context.Context,
 	job *trainingv1alpha1.ResumableTrainingJob,
@@ -318,14 +326,44 @@ func (r *ResumableTrainingJobReconciler) reconcileManagerIntent(
 		}
 	}
 
+	pauseRequested := isRemotePauseRequested(job)
+
+	// Preserve the remote checkpoint summary before syncRemoteStatus
+	// potentially clears it. When the adapter tears down the active remote
+	// and creates a new one (with Paused spec), the fresh remote's empty
+	// status is mirrored. Without preservation, the checkpoint evidence
+	// from the previous run is lost.
+	var preserved *trainingv1alpha1.RemoteCheckpointSummary
+	if pauseRequested {
+		preserved = preserveRemoteCheckpoint(job)
+	}
+
 	// Sync remote status: detect mirrored status from the adapter and
 	// populate MultiClusterStatus fields.
 	changed := syncRemoteStatus(job, executionCluster, now)
 
-	// When no remote status has been mirrored yet, set the manager-side
-	// phase to Queued to indicate we are waiting for dispatch. This
-	// preserves the behavior from markManagerSuppressed.
-	if !hasRemoteStatusSignal(job) {
+	// Restore the preserved checkpoint if syncRemoteStatus cleared it.
+	if pauseRequested {
+		changed = restoreRemoteCheckpoint(job, preserved) || changed
+	}
+
+	// Handle pause/resume for remote RTJs.
+	if pauseRequested {
+		// Mark as Paused when the remote is no longer active (the adapter
+		// has torn it down) or when the remote itself reports a paused
+		// state. While the remote is still active, requeue to wait for
+		// teardown.
+		if !hasRemoteStatusSignal(job) {
+			changed = markRemotePaused(job, now) || changed
+		} else {
+			// Remote is still active; the adapter will tear it down soon.
+			// Requeue to poll.
+			logger.Info("manager mode: pause requested, waiting for remote teardown",
+				"remotePhase", job.Status.MultiCluster.RemotePhase)
+		}
+	} else if !hasRemoteStatusSignal(job) {
+		// Normal: no pause requested and no remote signal. Either waiting
+		// for initial dispatch or transitioning after a resume.
 		changed = markManagerSuppressed(job, now) || changed
 	}
 
@@ -346,7 +384,13 @@ func (r *ResumableTrainingJobReconciler) reconcileManagerIntent(
 		"executionCluster", mc.ExecutionCluster,
 		"remotePhase", mc.RemotePhase,
 		"localExecutionSuppressed", mc.LocalExecutionSuppressed,
+		"pauseRequested", pauseRequested,
 	)
+
+	// Requeue during transitional states to ensure timely convergence.
+	if pauseRequested && hasRemoteStatusSignal(job) {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
