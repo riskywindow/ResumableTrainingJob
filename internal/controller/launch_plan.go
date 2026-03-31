@@ -7,6 +7,7 @@ import (
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
 	rtjjobset "github.com/example/checkpoint-native-preemption-controller/internal/jobset"
+	"github.com/example/checkpoint-native-preemption-controller/internal/provisioning"
 	"github.com/example/checkpoint-native-preemption-controller/internal/topology"
 )
 
@@ -28,6 +29,10 @@ type LaunchPlan struct {
 
 	// WorldSize is the effective world size for this launch.
 	WorldSize int32
+
+	// PodSetUpdates are merged podSetUpdates from AdmissionCheck suggestions.
+	// Phase 7: applied additively to the rendered child JobSet.
+	PodSetUpdates map[string]provisioning.PodSetUpdateEntry
 }
 
 // buildLaunchPlan computes the launch parameters from the Workload admission
@@ -60,6 +65,11 @@ func buildLaunchPlan(
 	if plan.WorldSize == 0 {
 		plan.WorldSize = job.Spec.Identity.WorldSize
 		plan.WorkerCount = job.EffectivePreferredCount()
+	}
+
+	// Phase 7: extract merged podSetUpdates from the launch readiness view.
+	if gateResult.LaunchView != nil {
+		plan.PodSetUpdates = gateResult.LaunchView.MergedPodSetUpdates()
 	}
 
 	return plan
@@ -119,6 +129,7 @@ func (plan *LaunchPlan) toRenderInput(
 		ControlConfigMapName: controlConfigMapName,
 		ResumeManifestURI:    resumeManifestURI,
 		TopologyResult:       plan.TopologyResult,
+		PodSetUpdates:        plan.PodSetUpdates,
 	}
 
 	if plan.AdmittedCounts != nil {

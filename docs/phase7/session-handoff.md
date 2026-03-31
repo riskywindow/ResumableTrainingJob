@@ -333,37 +333,178 @@ go test ./...                                  -- PASS (all packages)
 
 ### Recommended next prompt
 
+See Session 4 below.
+
+---
+
+## Session 4: Provisioning-Aware Launch Gate & podSetUpdates Integration
+
+**Date**: 2026-03-31
+
+### Mission
+
+Integrate the provisioning observation layer (Session 3) into the RTJ
+controller's launch gate and render path. Make launch gating provisioning-
+aware and topology-second-pass-aware, and apply AdmissionCheck-suggested
+podSetUpdates to the child JobSet.
+
+Hard boundaries:
+- RTJ remains the only Kueue-managed object.
+- Child JobSets remain plain runtime only.
+- Do not launch child runtime before the launch gate is fully satisfied.
+- Keep all modifications additive; do not overwrite existing selectors/
+  tolerations/labels/annotations in unsupported ways.
+- Preserve Phase 6 launch behavior when provisioning is not configured.
+
+### Decisions made
+
+1. **Launch gate generalized with Phase 7 provisioning awareness.**
+   `evaluateLaunchGates()` now calls `provisioning.BuildView()` to get the
+   `LaunchReadinessView` and evaluates gates in order: quota → all ACs →
+   topology second pass → topology assignment. The old Phase 4 resume-
+   readiness-specific gate is subsumed by the generalized "all ACs Ready"
+   check.
+
+2. **`ProvisioningACNames` added to reconciler.** A `map[string]bool` field
+   on `ResumableTrainingJobReconciler` identifies which Workload AC names
+   are ProvisioningRequest checks. When empty, provisioning is not configured
+   and Phase 6 backward compatibility is preserved unconditionally.
+
+3. **podSetUpdates applied additively in render path.** After topology
+   injection, `ApplyPodSetUpdates()` merges labels, annotations,
+   nodeSelector (conflict-detected), and tolerations (appended, deduplicated)
+   from the merged podSetUpdates into the rendered JobSet spec.
+
+4. **Conflict detection is fail-fast.** Before launching, a dry-run apply
+   checks for conflicts between podSetUpdates and the existing rendered
+   template. Conflicting keys (same key, different value) cause the RTJ to
+   transition to PhaseFailed with a clear error message identifying the
+   conflicting field, key, existing value, and update value.
+
+5. **Same-value updates are not conflicts.** If a podSetUpdate sets a key
+   that already exists with the same value, it is treated as an idempotent
+   merge (not a conflict).
+
+6. **Six Phase 7 conditions surfaced.** CapacityPending,
+   ProvisioningInProgress, ProvisioningFailed, TopologyPendingSecondPass,
+   LaunchReady, LaunchBlockedByConflictingPodSetUpdate.
+
+7. **Phase 7 status sections populated on every gate evaluation.**
+   status.launchGate, status.provisioning, and status.capacity are synced
+   from the LaunchReadinessView on both blocked and ready gate outcomes.
+   They are nil when the gate evaluation path is not entered (Phase 6
+   backward compatibility).
+
+8. **LaunchGateResult extended with LaunchView.** The gate result now
+   carries the `*provisioning.LaunchReadinessView` so the caller can
+   extract podSetUpdates and provisioning state without a second BuildView
+   call.
+
+9. **LaunchPlan extended with PodSetUpdates.** `buildLaunchPlan()` extracts
+   merged podSetUpdates from the LaunchView and passes them through
+   `toRenderInput()` to the render path.
+
+10. **Existing Phase 4 test updated.** The test
+    `TestReconcileDoesNotCreateChildJobSetBeforeTopologyAssignment` now
+    accepts both `WaitingForTopologyAssignment` and
+    `TopologyPendingSecondPass` reasons, since the Phase 7 gate catches
+    the topology second-pass scenario before the old Phase 4 check.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| internal/controller/launch_gate.go | Modified: added Phase 7 provisioning-aware gate with BuildView integration |
+| internal/controller/launch_gate_test.go | Created: 7 Phase 7 launch gate tests |
+| internal/controller/status_helpers.go | Modified: added 6 Phase 7 status helpers, condition types, comparison functions |
+| internal/controller/launch_plan.go | Modified: added PodSetUpdates field, BuildView extraction |
+| internal/controller/resumabletrainingjob_controller.go | Modified: added ProvisioningACNames, wired Phase 7 status sync, podSetUpdate conflict check |
+| internal/controller/resumabletrainingjob_controller_test.go | Modified: updated topology test for Phase 7 reason |
+| internal/jobset/render.go | Modified: added PodSetUpdates to RenderInput, apply step after topology |
+| internal/jobset/podsetupdates.go | Created: additive podSetUpdate application with conflict detection |
+| internal/jobset/podsetupdates_test.go | Created: 17 podSetUpdates tests |
+| docs/phase7/launch-gating.md | Created: Phase 7 launch gating documentation |
+| docs/phase7/session-handoff.md | Modified: added Session 4 |
+
+### Tests run
+
+All tests pass across the entire project:
 ```
-You are working on Phase 7 Session 4 for the checkpoint-native preemption
+go test ./... -count=1  -- PASS (all packages)
+```
+
+### Tests added (24 total)
+
+**launch_gate_test.go (7 tests):**
+- `TestReconcileDoesNotCreateChildJobSetBeforeProvisioningReady` -- no child while provisioning pending
+- `TestReconcileDoesNotCreateChildJobSetBeforeDelayedTopologyAssignment` -- no child while topology second pass pending
+- `TestReconcileProvisioningReadyLaunchesWithPodSetUpdates` -- launches with nodeSelector and toleration from podSetUpdates
+- `TestReconcileProvisioningFailedBlocksLaunch` -- no child when provisioning rejected
+- `TestReconcilePhase6BehaviorPreservedWhenProvisioningAbsent` -- Phase 6 path unchanged
+- `TestReconcileConflictingPodSetUpdateFailsClearly` -- conflicting nodeSelector causes PhaseFailed
+- `TestReconcileMultipleACsOneNotReadyBlocksLaunch` -- one pending AC blocks with AC summary
+
+**podsetupdates_test.go (17 tests):**
+- Additive labels, nodeSelector, annotations, tolerations
+- Conflicting nodeSelector fails
+- Same-value nodeSelector not a conflict
+- Preserves existing with new keys
+- No PodSet match is no-op
+- Empty updates is no-op
+- Coexists with topology injection
+- Conflict message format
+- Duplicate tolerations deduplicated
+- Direct ApplyPodSetUpdates unit test
+
+### Open issues
+
+1. **OQ1**: Resolved. ProvisioningRequest types confirmed in Kueue v0.15.1
+   and controller integration completed.
+2. **OQ2**: waitForPodsReady eviction condition format -- still open. Not
+   needed for launch gating; needed for StartupRecovery integration (Session 5).
+3. **OQ3**: Topology assignment timing with ProvisioningRequest -- still open.
+   E2E testing will confirm actual Kueue behavior.
+4. **OQ4**: ProvisioningRequest cleanup on yield/preemption -- still open.
+5. **OQ5**: Resolved (Session 1).
+6. **OQ6**: Multi-cluster provisioning status mirroring -- should-ship.
+7. **OQ7**: Backoff behavior -- Retry state captured and mapped to Pending
+   in status API. Full surfacing deferred.
+8. **OQ8**: Feature gate naming -- still open. ProvisioningACNames is
+   currently a reconciler field; could be promoted to a feature gate.
+
+### Recommended next prompt
+
+```
+You are working on Phase 7 Session 5 for the checkpoint-native preemption
 controller repo.
 
-Read docs/phase7/session-handoff.md for context (Sessions 1-3).
+Read docs/phase7/session-handoff.md for context (Sessions 1-4).
 
-Session 3 implemented the internal/provisioning observation layer:
-- BuildView() builds a LaunchReadinessView from Kueue Workload status
-- 63 tests covering classification, parsing, topology, Phase 6 fallback
+Session 4 integrated the provisioning observation layer into the controller:
+- Launch gate is provisioning-aware and topology-second-pass-aware
+- podSetUpdates applied additively with conflict detection
+- 24 new tests, all passing
 
-Now integrate the observation layer into the RTJ controller:
+Now implement waitForPodsReady timeout/recovery semantics:
 
-1. Wire BuildView() into the RTJ reconciler to populate the Phase 7
-   status sections on each reconciliation:
-   - status.launchGate from LaunchReadinessView
-   - status.provisioning from Provisioning classification
-   - status.capacity from provisioning + admission state
-   Do NOT modify the launch/Starting transition yet.
+1. Resolve OQ2: audit Kueue v0.15.1 source for waitForPodsReady eviction
+   condition type/reason format. Document findings.
 
-2. Determine ProvisioningACNames from the ClusterQueue's AdmissionCheck
-   configuration (or from a configurable controller option).
+2. Implement StartupRecovery status population:
+   - Detect Kueue eviction conditions on the Workload
+   - Populate status.startupRecovery with startup/recovery lifecycle
+   - Map eviction reasons to StartupState transitions
 
-3. Add unit tests for the status population logic covering:
-   - Phase 6 fallback (no provisioning → launchGate=Open, capacity=QuotaOnly)
-   - Provisioning pending → launchGate=Blocked
-   - Provisioning ready + topology assigned → launchGate=Open
-   - Provisioning failed → launchGate=Blocked
-   - Multiple ACs with one pending → launchGate=Blocked
+3. Wire eviction detection into the yield path:
+   - When Kueue evicts via waitForPodsReady timeout, enter the existing
+     graceful yield path
+   - Distinguish timeout evictions from preemption via conditions
 
-4. Resolve OQ2: read the Kueue v0.15.1 source for waitForPodsReady
-   eviction condition type/reason and document findings.
+4. Add unit tests covering:
+   - Normal startup lifecycle (Starting → Running)
+   - waitForPodsReady timeout triggers yield
+   - Eviction reason captured in status
+   - Phase 6 behavior unchanged
 
-5. Update docs/phase7/session-handoff.md with Session 4 results.
+5. Update docs/phase7/session-handoff.md with Session 5 results.
 ```

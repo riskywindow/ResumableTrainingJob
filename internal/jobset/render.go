@@ -12,6 +12,7 @@ import (
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
 	"github.com/example/checkpoint-native-preemption-controller/internal/checkpoints"
+	"github.com/example/checkpoint-native-preemption-controller/internal/provisioning"
 	"github.com/example/checkpoint-native-preemption-controller/internal/topology"
 )
 
@@ -40,6 +41,11 @@ type RenderInput struct {
 	// Phase 4: parsed topology assignment from Kueue TAS. When non-nil,
 	// topology constraints (nodeSelector) are injected into pod templates.
 	TopologyResult *topology.ParseResult
+
+	// Phase 7: merged podSetUpdates from AdmissionCheck suggestions.
+	// When non-nil, these updates are applied additively to the rendered
+	// JobSet after topology injection. Keys are PodSet names.
+	PodSetUpdates map[string]provisioning.PodSetUpdateEntry
 }
 
 func RenderChildJobSet(input RenderInput) (*Object, error) {
@@ -150,6 +156,14 @@ func RenderChildJobSet(input RenderInput) (*Object, error) {
 		workerName := resolveWorkerName(input.RTJ, &obj.Spec)
 		if _, err := InjectTopology(&obj.Spec, workerName, input.TopologyResult); err != nil {
 			return nil, fmt.Errorf("inject topology: %w", err)
+		}
+	}
+
+	// Phase 7: apply podSetUpdates from AdmissionCheck suggestions additively.
+	if len(input.PodSetUpdates) > 0 {
+		updateResult := ApplyPodSetUpdates(&obj.Spec, input.PodSetUpdates)
+		if !updateResult.Applied {
+			return nil, fmt.Errorf("apply podSetUpdates: %s", updateResult.ConflictMessage())
 		}
 	}
 
