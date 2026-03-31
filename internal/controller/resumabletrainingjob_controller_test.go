@@ -945,8 +945,11 @@ func TestReconcileDoesNotCreateChildJobSetBeforeTopologyAssignment(t *testing.T)
 	if updated.Status.LaunchReadiness == nil {
 		t.Fatal("expected LaunchReadiness to be set")
 	}
-	if updated.Status.LaunchReadiness.Reason != reasonWaitingForTopology {
-		t.Fatalf("expected reason %q, got %q", reasonWaitingForTopology, updated.Status.LaunchReadiness.Reason)
+	// Phase 7: the gate now detects topology second-pass pending before the
+	// old Phase 4 topology check, so the reason is TopologyPendingSecondPass.
+	if updated.Status.LaunchReadiness.Reason != reasonTopologyPendingSecondPass &&
+		updated.Status.LaunchReadiness.Reason != reasonWaitingForTopology {
+		t.Fatalf("expected reason %q or %q, got %q", reasonTopologyPendingSecondPass, reasonWaitingForTopology, updated.Status.LaunchReadiness.Reason)
 	}
 }
 

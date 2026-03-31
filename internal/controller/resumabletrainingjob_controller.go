@@ -46,6 +46,12 @@ type ResumableTrainingJobReconciler struct {
 	// dispatched RTJs. Only used when Mode is ModeManager. Nil is safe
 	// (execution cluster will be reported as unknown).
 	ClusterResolver remote.ClusterResolver
+
+	// ProvisioningACNames identifies which Workload AdmissionCheck names are
+	// ProvisioningRequest checks. When empty, provisioning is considered
+	// not configured and Phase 6 backward-compatible behavior is preserved.
+	// Phase 7: set from ClusterQueue AdmissionCheck configuration or operator flags.
+	ProvisioningACNames map[string]bool
 }
 
 // +kubebuilder:rbac:groups=training.checkpoint.example.io,resources=resumabletrainingjobs,verbs=get;list;watch;update;patch
@@ -155,16 +161,23 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, nil
 	}
 
-	// Phase 4: evaluate pre-launch gates (readiness check, topology).
-	// Only evaluate when features are potentially active (topology enabled or
-	// workload reference present indicating Kueue integration).
-	if job.IsTopologyEnabled() || job.Status.WorkloadReference != nil {
+	// Phase 4/7: evaluate pre-launch gates (readiness check, topology, provisioning).
+	// Only evaluate when features are potentially active (topology enabled,
+	// workload reference present indicating Kueue integration, or provisioning configured).
+	if job.IsTopologyEnabled() || job.Status.WorkloadReference != nil || len(r.ProvisioningACNames) > 0 {
 		gateResult, err := r.evaluateLaunchGates(ctx, &job)
 		if err != nil {
 			return r.failLaunch(ctx, &job, fmt.Sprintf("evaluate launch gates: %v", err))
 		}
 		if gateResult != nil && !gateResult.Ready {
 			changed := syncLaunchReadinessStatus(&job, gateResult)
+			// Phase 7: sync launch gate, provisioning, capacity status and conditions.
+			changed = syncLaunchGateStatus(&job, gateResult, now) || changed
+			if gateResult.LaunchView != nil {
+				changed = syncProvisioningStatus(&job, gateResult.LaunchView, now) || changed
+				changed = syncCapacityStatus(&job, gateResult.LaunchView) || changed
+			}
+			changed = syncPhase7Conditions(&job, gateResult, now) || changed
 			if changed {
 				if err := r.Status().Update(ctx, &job); err != nil {
 					return ctrl.Result{}, err
@@ -190,6 +203,13 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 			changed := syncLaunchReadinessStatus(&job, gateResult)
 			workerName := resolveWorkerPodSetNameForJob(&job)
 			changed = syncTopologyStatus(&job, gateResult.TopologyResult, workerName) || changed
+			// Phase 7: sync launch gate, provisioning, capacity status and conditions.
+			changed = syncLaunchGateStatus(&job, gateResult, now) || changed
+			if gateResult.LaunchView != nil {
+				changed = syncProvisioningStatus(&job, gateResult.LaunchView, now) || changed
+				changed = syncCapacityStatus(&job, gateResult.LaunchView) || changed
+			}
+			changed = syncPhase7Conditions(&job, gateResult, now) || changed
 			if changed {
 				if err := r.Status().Update(ctx, &job); err != nil {
 					return ctrl.Result{}, err
@@ -200,6 +220,29 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 				r.Metrics.ObserveReadinessGateOutcome("Ready")
 				if gateResult.TopologyResult != nil {
 					r.Metrics.IncTopologyAwareLaunch()
+				}
+			}
+			// Phase 7: check for podSetUpdate conflicts before launching.
+			if gateResult.LaunchView != nil {
+				plan := buildLaunchPlan(&job, gateResult)
+				if len(plan.PodSetUpdates) > 0 {
+					// Dry-run apply to check for conflicts.
+					spec, parseErr := rtjjobset.ParseTemplate(job.Spec.Runtime.Template.Spec)
+					if parseErr == nil {
+						testResult := rtjjobset.ApplyPodSetUpdates(&spec, plan.PodSetUpdates)
+						if !testResult.Applied {
+							msg := testResult.ConflictMessage()
+							changed := setLaunchBlockedByConflictingUpdate(&job, msg, now)
+							changed = markFailed(&job, reasonLaunchBlockedByConflictingUpdate, msg, now) || changed
+							if changed {
+								if err := r.Status().Update(ctx, &job); err != nil {
+									return ctrl.Result{}, err
+								}
+							}
+							logger.Info("launch blocked by conflicting podSetUpdate", "conflicts", msg)
+							return ctrl.Result{}, fmt.Errorf("launch blocked: %s", msg)
+						}
+					}
 				}
 			}
 			// Store the gate result for the launch/resume paths to use.

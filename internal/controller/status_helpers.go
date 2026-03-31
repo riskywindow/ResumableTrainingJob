@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
+	"github.com/example/checkpoint-native-preemption-controller/internal/provisioning"
 )
 
 const (
@@ -603,4 +604,342 @@ func clearPriorityShapingOnQueued(
 		changed = true
 	}
 	return changed
+}
+
+// --- Phase 7: Launch gate, provisioning, and capacity status helpers ---
+
+const (
+	conditionTypeCapacityPending              = "CapacityPending"
+	conditionTypeProvisioningInProgress       = "ProvisioningInProgress"
+	conditionTypeProvisioningFailed           = "ProvisioningFailed"
+	conditionTypeTopologyPendingSecondPass    = "TopologyPendingSecondPass"
+	conditionTypeLaunchReady                  = "LaunchReady"
+	conditionTypeLaunchBlockedConflictingUpdate = "LaunchBlockedByConflictingPodSetUpdate"
+
+	capacityReasonProvisioningSatisfied = "ProvisioningSatisfied"
+	capacityReasonQuotaOnlyAdmission    = "QuotaOnlyAdmission"
+	capacityReasonProvisioningPending   = "ProvisioningPending"
+	capacityReasonNotAdmitted           = "NotAdmitted"
+)
+
+// syncLaunchGateStatus updates the RTJ's Phase 7 LaunchGate status from the
+// LaunchReadinessView and the gate evaluation result. Returns true if changed.
+func syncLaunchGateStatus(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	gateResult *LaunchGateResult,
+	now metav1.Time,
+) bool {
+	if gateResult == nil || gateResult.LaunchView == nil {
+		if job.Status.LaunchGate == nil {
+			return false
+		}
+		job.Status.LaunchGate = nil
+		return true
+	}
+
+	view := gateResult.LaunchView
+
+	// Build the desired LaunchGateStatus.
+	desired := &trainingv1alpha1.LaunchGateStatus{
+		Reason:  gateResult.Reason,
+		Message: gateResult.Message,
+	}
+
+	if gateResult.Ready {
+		desired.State = trainingv1alpha1.LaunchGateOpen
+	} else {
+		desired.State = trainingv1alpha1.LaunchGateBlocked
+	}
+
+	// Build admission check summary.
+	if len(view.AdmissionChecks) > 0 {
+		desired.AdmissionCheckSummary = make(map[string]trainingv1alpha1.AdmissionCheckState, len(view.AdmissionChecks))
+		for _, ac := range view.AdmissionChecks {
+			desired.AdmissionCheckSummary[ac.Name] = mapCheckState(ac.State)
+		}
+	}
+
+	// Build topology gate state.
+	if !view.TopologyState.Configured {
+		desired.TopologyGateState = trainingv1alpha1.TopologyGateNotConfigured
+	} else if view.TopologyState.SecondPassPending {
+		desired.TopologyGateState = trainingv1alpha1.TopologyGatePending
+	} else if view.TopologyState.Assigned {
+		desired.TopologyGateState = trainingv1alpha1.TopologyGateAssigned
+	} else {
+		desired.TopologyGateState = trainingv1alpha1.TopologyGatePending
+	}
+
+	if launchGateStatusEqual(job.Status.LaunchGate, desired) {
+		return false
+	}
+
+	desired.LastTransitionTime = &now
+	job.Status.LaunchGate = desired
+	return true
+}
+
+// syncProvisioningStatus updates the RTJ's Phase 7 Provisioning status from
+// the LaunchReadinessView. Returns true if changed.
+func syncProvisioningStatus(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	view *provisioning.LaunchReadinessView,
+	now metav1.Time,
+) bool {
+	if view == nil {
+		if job.Status.Provisioning == nil {
+			return false
+		}
+		job.Status.Provisioning = nil
+		return true
+	}
+
+	desired := &trainingv1alpha1.ProvisioningStatus{
+		State: mapProvisioningState(view.Provisioning),
+	}
+
+	switch view.Provisioning {
+	case provisioning.ProvisioningPending, provisioning.ProvisioningRetry:
+		desired.Reason = "BackendProcessing"
+		desired.Message = "ProvisioningRequest backend is processing the capacity request."
+	case provisioning.ProvisioningProvisioned:
+		desired.Reason = "CapacityConfirmed"
+		desired.Message = "ProvisioningRequest backend confirmed physical capacity is available."
+	case provisioning.ProvisioningFailed:
+		desired.Reason = "BackendRejected"
+		desired.Message = "ProvisioningRequest backend rejected the capacity request."
+	default:
+		desired.Reason = "NotConfigured"
+		desired.Message = "No ProvisioningRequest AdmissionCheck is configured."
+	}
+
+	if view.ProvisioningRequestRef != nil {
+		desired.ProvisioningRequestRef = &trainingv1alpha1.ProvisioningRequestReference{
+			Name:      view.ProvisioningRequestRef.Name,
+			Namespace: view.ProvisioningRequestRef.Namespace,
+		}
+		desired.Attempt = 1
+	}
+
+	if provisioningStatusEqual(job.Status.Provisioning, desired) {
+		return false
+	}
+
+	desired.LastTransitionTime = &now
+	job.Status.Provisioning = desired
+	return true
+}
+
+// syncCapacityStatus updates the RTJ's Phase 7 Capacity status derived from
+// provisioning and admission state. Returns true if changed.
+func syncCapacityStatus(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	view *provisioning.LaunchReadinessView,
+) bool {
+	if view == nil {
+		if job.Status.Capacity == nil {
+			return false
+		}
+		job.Status.Capacity = nil
+		return true
+	}
+
+	desired := &trainingv1alpha1.CapacityStatus{}
+
+	switch {
+	case view.Provisioning == provisioning.ProvisioningProvisioned && view.QuotaReserved:
+		desired.GuaranteeActive = true
+		desired.Reason = capacityReasonProvisioningSatisfied
+	case view.Provisioning == provisioning.ProvisioningNotConfigured && view.QuotaReserved:
+		desired.GuaranteeActive = false
+		desired.Reason = capacityReasonQuotaOnlyAdmission
+	case view.ProvisioningRequestPresent && !view.AllChecksReady:
+		desired.GuaranteeActive = false
+		desired.Reason = capacityReasonProvisioningPending
+	default:
+		desired.GuaranteeActive = false
+		desired.Reason = capacityReasonNotAdmitted
+	}
+
+	if capacityStatusEqual(job.Status.Capacity, desired) {
+		return false
+	}
+	job.Status.Capacity = desired
+	return true
+}
+
+// syncPhase7Conditions sets Phase 7 conditions based on the gate result.
+// Returns true if any condition changed.
+func syncPhase7Conditions(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	gateResult *LaunchGateResult,
+	now metav1.Time,
+) bool {
+	if gateResult == nil || gateResult.LaunchView == nil {
+		// Clear all Phase 7 conditions.
+		changed := clearCondition(job, conditionTypeCapacityPending)
+		changed = clearCondition(job, conditionTypeProvisioningInProgress) || changed
+		changed = clearCondition(job, conditionTypeProvisioningFailed) || changed
+		changed = clearCondition(job, conditionTypeTopologyPendingSecondPass) || changed
+		changed = clearCondition(job, conditionTypeLaunchReady) || changed
+		changed = clearCondition(job, conditionTypeLaunchBlockedConflictingUpdate) || changed
+		return changed
+	}
+
+	view := gateResult.LaunchView
+	changed := false
+
+	// CapacityPending
+	if view.ProvisioningRequestPresent && !view.AllChecksReady {
+		changed = setCondition(job, conditionTypeCapacityPending, metav1.ConditionTrue,
+			reasonCapacityPending,
+			"Waiting for ProvisioningRequest to be satisfied before launching child runtime.",
+			now) || changed
+	} else {
+		changed = clearCondition(job, conditionTypeCapacityPending) || changed
+	}
+
+	// ProvisioningInProgress
+	if view.Provisioning == provisioning.ProvisioningPending || view.Provisioning == provisioning.ProvisioningRetry {
+		changed = setCondition(job, conditionTypeProvisioningInProgress, metav1.ConditionTrue,
+			reasonProvisioningInProgress,
+			"ProvisioningRequest backend is processing the capacity request.",
+			now) || changed
+	} else {
+		changed = clearCondition(job, conditionTypeProvisioningInProgress) || changed
+	}
+
+	// ProvisioningFailed
+	if view.Provisioning == provisioning.ProvisioningFailed {
+		changed = setCondition(job, conditionTypeProvisioningFailed, metav1.ConditionTrue,
+			reasonProvisioningFailed,
+			"ProvisioningRequest backend rejected the capacity request.",
+			now) || changed
+	} else {
+		changed = clearCondition(job, conditionTypeProvisioningFailed) || changed
+	}
+
+	// TopologyPendingSecondPass
+	if view.TopologyState.Configured && view.TopologyState.SecondPassPending {
+		changed = setCondition(job, conditionTypeTopologyPendingSecondPass, metav1.ConditionTrue,
+			reasonTopologyPendingSecondPass,
+			"Topology is configured but the topology assignment is not yet available (second-pass pending).",
+			now) || changed
+	} else {
+		changed = clearCondition(job, conditionTypeTopologyPendingSecondPass) || changed
+	}
+
+	// LaunchReady
+	if gateResult.Ready {
+		changed = setCondition(job, conditionTypeLaunchReady, metav1.ConditionTrue,
+			reasonLaunchReady,
+			"All launch gates satisfied; child runtime may be created.",
+			now) || changed
+	} else {
+		changed = clearCondition(job, conditionTypeLaunchReady) || changed
+	}
+
+	return changed
+}
+
+// setLaunchBlockedByConflictingUpdate sets the
+// LaunchBlockedByConflictingPodSetUpdate condition. Returns true if changed.
+func setLaunchBlockedByConflictingUpdate(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	message string,
+	now metav1.Time,
+) bool {
+	return setCondition(job, conditionTypeLaunchBlockedConflictingUpdate,
+		metav1.ConditionTrue,
+		reasonLaunchBlockedByConflictingUpdate,
+		message,
+		now)
+}
+
+// --- Phase 7 status comparison helpers ---
+
+func mapCheckState(state provisioning.CheckStateClassification) trainingv1alpha1.AdmissionCheckState {
+	switch state {
+	case provisioning.CheckReady:
+		return trainingv1alpha1.AdmissionCheckReady
+	case provisioning.CheckPending:
+		return trainingv1alpha1.AdmissionCheckPending
+	case provisioning.CheckRetry:
+		return trainingv1alpha1.AdmissionCheckRetry
+	case provisioning.CheckRejected:
+		return trainingv1alpha1.AdmissionCheckRejected
+	default:
+		return trainingv1alpha1.AdmissionCheckPending
+	}
+}
+
+func mapProvisioningState(state provisioning.ProvisioningClassification) trainingv1alpha1.ProvisioningState {
+	switch state {
+	case provisioning.ProvisioningNotConfigured:
+		return trainingv1alpha1.ProvisioningNotConfigured
+	case provisioning.ProvisioningPending, provisioning.ProvisioningRetry:
+		return trainingv1alpha1.ProvisioningPending
+	case provisioning.ProvisioningProvisioned:
+		return trainingv1alpha1.ProvisioningProvisioned
+	case provisioning.ProvisioningFailed:
+		return trainingv1alpha1.ProvisioningFailed
+	default:
+		return trainingv1alpha1.ProvisioningNotConfigured
+	}
+}
+
+func launchGateStatusEqual(left, right *trainingv1alpha1.LaunchGateStatus) bool {
+	switch {
+	case left == nil && right == nil:
+		return true
+	case left == nil || right == nil:
+		return false
+	}
+	if left.State != right.State || left.Reason != right.Reason ||
+		left.Message != right.Message || left.TopologyGateState != right.TopologyGateState {
+		return false
+	}
+	if len(left.AdmissionCheckSummary) != len(right.AdmissionCheckSummary) {
+		return false
+	}
+	for k, v := range left.AdmissionCheckSummary {
+		if right.AdmissionCheckSummary[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func provisioningStatusEqual(left, right *trainingv1alpha1.ProvisioningStatus) bool {
+	switch {
+	case left == nil && right == nil:
+		return true
+	case left == nil || right == nil:
+		return false
+	}
+	if left.State != right.State || left.Reason != right.Reason ||
+		left.Message != right.Message || left.Attempt != right.Attempt {
+		return false
+	}
+	return provisioningRefEqual(left.ProvisioningRequestRef, right.ProvisioningRequestRef)
+}
+
+func provisioningRefEqual(left, right *trainingv1alpha1.ProvisioningRequestReference) bool {
+	switch {
+	case left == nil && right == nil:
+		return true
+	case left == nil || right == nil:
+		return false
+	}
+	return left.Name == right.Name && left.Namespace == right.Namespace
+}
+
+func capacityStatusEqual(left, right *trainingv1alpha1.CapacityStatus) bool {
+	switch {
+	case left == nil && right == nil:
+		return true
+	case left == nil || right == nil:
+		return false
+	}
+	return left.GuaranteeActive == right.GuaranteeActive && left.Reason == right.Reason
 }

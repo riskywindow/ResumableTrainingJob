@@ -11,6 +11,7 @@ import (
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
 	resumeac "github.com/example/checkpoint-native-preemption-controller/internal/admissionchecks/resume"
+	"github.com/example/checkpoint-native-preemption-controller/internal/provisioning"
 	"github.com/example/checkpoint-native-preemption-controller/internal/topology"
 )
 
@@ -33,22 +34,44 @@ type LaunchGateResult struct {
 	// Workload is the Kueue Workload object (when found). Retained so the
 	// caller can extract admission info without a second fetch.
 	Workload *kueuev1beta2.Workload
+
+	// LaunchView is the Phase 7 provisioning/topology observation layer view.
+	// Populated when a Workload is found. Nil when no Workload exists
+	// (Phase 3/6 backward-compatible path).
+	LaunchView *provisioning.LaunchReadinessView
 }
 
 const (
-	reasonWaitingForReadinessGate = "WaitingForReadinessGate"
-	reasonReadinessGateRejected   = "ReadinessGateRejected"
-	reasonWaitingForTopology      = "WaitingForTopologyAssignment"
+	reasonWaitingForReadinessGate  = "WaitingForReadinessGate"
+	reasonReadinessGateRejected    = "ReadinessGateRejected"
+	reasonWaitingForTopology       = "WaitingForTopologyAssignment"
 	reasonTopologyNotRepresentable = "TopologyNotRepresentable"
+
+	// Phase 7: provisioning-aware gate reasons.
+	reasonCapacityPending                   = "CapacityPending"
+	reasonProvisioningInProgress            = "ProvisioningInProgress"
+	reasonProvisioningFailed                = "ProvisioningFailed"
+	reasonTopologyPendingSecondPass         = "TopologyPendingSecondPass"
+	reasonLaunchReady                       = "LaunchReady"
+	reasonLaunchBlockedByConflictingUpdate  = "LaunchBlockedByConflictingPodSetUpdate"
+	reasonAdmissionCheckPending             = "AdmissionCheckPending"
+	reasonQuotaNotReserved                  = "QuotaNotReserved"
 )
 
 // evaluateLaunchGates checks all pre-launch prerequisites:
 //  1. RTJ is admitted (not suspended) — already checked by caller.
-//  2. If a ResumeReadiness AdmissionCheck is configured, it must be Ready.
-//  3. If topology is enabled, the topology assignment must be present on the Workload.
+//  2. Phase 7: All AdmissionChecks on the Workload must be Ready.
+//  3. Phase 7: If provisioning is configured, the ProvisioningRequest AC must be Ready.
+//  4. Phase 7: If topology is configured and delayedTopologyRequest is true,
+//     the topology assignment must be present.
+//  5. Phase 4: ResumeReadiness AdmissionCheck must be Ready (if configured).
+//  6. Phase 4: Topology assignment must be present when topology is enabled.
 //
 // When any gate is not satisfied, the result indicates not-ready with a reason.
 // When all gates pass, Ready is true and TopologyResult is populated (if applicable).
+//
+// Phase 6 backward compatibility: when no Workload exists or no AdmissionChecks
+// are configured, the gates pass through (fail-open).
 func (r *ResumableTrainingJobReconciler) evaluateLaunchGates(
 	ctx context.Context,
 	job *trainingv1alpha1.ResumableTrainingJob,
@@ -65,30 +88,87 @@ func (r *ResumableTrainingJobReconciler) evaluateLaunchGates(
 		Workload: workload,
 	}
 
-	// Gate 1: Check ResumeReadiness AdmissionCheck (if configured).
+	// Phase 7: Build the launch readiness view from the Workload.
+	viewOpts := provisioning.ViewOptions{
+		ProvisioningACNames: r.ProvisioningACNames,
+		TopologyEnabled:     job.IsTopologyEnabled(),
+	}
 	if workload != nil {
-		gateState := evaluateReadinessCheck(workload)
-		switch gateState {
-		case trainingv1alpha1.ReadinessGatePending:
+		viewOpts.WorkloadName = workload.Name
+		viewOpts.WorkloadNamespace = workload.Namespace
+	}
+	view := provisioning.BuildView(workload, viewOpts)
+	result.LaunchView = view
+
+	// Phase 7 Gate 1: Check quota reservation.
+	if workload != nil && !view.QuotaReserved {
+		result.Ready = false
+		result.Reason = reasonQuotaNotReserved
+		result.Message = "Workload exists but quota has not been reserved yet."
+		logger.Info("launch gated: quota not reserved")
+		return result, nil
+	}
+
+	// Phase 7 Gate 2: Check all AdmissionChecks are Ready.
+	// This generalizes the Phase 4 ResumeReadiness check to cover ALL ACs
+	// (ProvisioningRequest, ResumeReadiness, and any future ACs).
+	if workload != nil && !view.AllChecksReady {
+		// Determine the most specific reason based on provisioning state.
+		switch view.Provisioning {
+		case provisioning.ProvisioningPending, provisioning.ProvisioningRetry:
 			result.Ready = false
-			result.Reason = reasonWaitingForReadinessGate
-			result.Message = "Waiting for ResumeReadiness AdmissionCheck to complete."
-			logger.Info("launch gated: waiting for readiness check")
+			result.Reason = reasonProvisioningInProgress
+			result.Message = "ProvisioningRequest AdmissionCheck is pending; waiting for backend to confirm capacity."
+			logger.Info("launch gated: provisioning in progress",
+				"provisioningState", view.Provisioning)
 			return result, nil
-		case trainingv1alpha1.ReadinessGateRejected:
+		case provisioning.ProvisioningFailed:
 			result.Ready = false
-			result.Reason = reasonReadinessGateRejected
-			result.Message = "ResumeReadiness AdmissionCheck was rejected."
-			logger.Info("launch gated: readiness check rejected")
+			result.Reason = reasonProvisioningFailed
+			result.Message = "ProvisioningRequest AdmissionCheck was rejected by the provisioning backend."
+			logger.Info("launch gated: provisioning failed")
 			return result, nil
-		case trainingv1alpha1.ReadinessGateReady:
-			// Pass through.
 		default:
-			// No readiness check configured — pass through (Phase 3 behavior).
+			// Check for ResumeReadiness-specific state (Phase 4 compat).
+			readinessState := evaluateReadinessCheck(workload)
+			switch readinessState {
+			case trainingv1alpha1.ReadinessGatePending:
+				result.Ready = false
+				result.Reason = reasonWaitingForReadinessGate
+				result.Message = "Waiting for ResumeReadiness AdmissionCheck to complete."
+				logger.Info("launch gated: waiting for readiness check")
+				return result, nil
+			case trainingv1alpha1.ReadinessGateRejected:
+				result.Ready = false
+				result.Reason = reasonReadinessGateRejected
+				result.Message = "ResumeReadiness AdmissionCheck was rejected."
+				logger.Info("launch gated: readiness check rejected")
+				return result, nil
+			default:
+				// Generic AC pending.
+				result.Ready = false
+				result.Reason = reasonAdmissionCheckPending
+				result.Message = "One or more AdmissionChecks are not yet Ready."
+				logger.Info("launch gated: admission check pending")
+				return result, nil
+			}
 		}
 	}
 
-	// Gate 2: Check topology assignment (if topology is enabled).
+	// Phase 7 Gate 3: Check topology second-pass when topology is configured.
+	// Even if all ACs are Ready, the topology assignment might not be present
+	// yet (delayed topology second-pass scenario).
+	if job.IsTopologyEnabled() && view.TopologyState.SecondPassPending {
+		result.Ready = false
+		result.Reason = reasonTopologyPendingSecondPass
+		result.Message = "Topology is configured but the topology assignment is not yet available (second-pass pending)."
+		logger.Info("launch gated: topology second pass pending")
+		return result, nil
+	}
+
+	// Phase 4 Gate: Check topology assignment (if topology is enabled).
+	// This handles the case where topology is enabled but the Workload
+	// might not have the assignment yet (non-delayed scenario).
 	if job.IsTopologyEnabled() {
 		if workload == nil || workload.Status.Admission == nil {
 			result.Ready = false
@@ -119,6 +199,8 @@ func (r *ResumableTrainingJobReconciler) evaluateLaunchGates(
 	}
 
 	result.Ready = true
+	result.Reason = reasonLaunchReady
+	result.Message = "All launch gates satisfied."
 	return result, nil
 }
 
@@ -134,17 +216,6 @@ func evaluateReadinessCheck(workload *kueuev1beta2.Workload) trainingv1alpha1.Re
 	}
 
 	for _, acs := range workload.Status.AdmissionChecks {
-		// We need to determine if this check is managed by our controller.
-		// The check name alone doesn't tell us; we need to match the state.
-		// Since we can't look up the AdmissionCheck object here (we don't have
-		// the client), we rely on a convention: any check that has been set to
-		// Ready/Retry/Rejected by our controller will have a recognizable
-		// reason string. However, the simplest approach is to check all
-		// admission checks and look for the resume-readiness controller's
-		// reason patterns.
-		//
-		// For a more precise check, we inspect the check name against known
-		// reason patterns from the resume-readiness controller.
 		if isResumeReadinessCheckState(&acs) {
 			switch acs.State {
 			case kueuev1beta2.CheckStateReady:
@@ -162,13 +233,8 @@ func evaluateReadinessCheck(workload *kueuev1beta2.Workload) trainingv1alpha1.Re
 }
 
 // isResumeReadinessCheckState checks if an AdmissionCheckState belongs to the
-// resume-readiness controller by matching known message patterns. In a
-// production system, this would look up the AdmissionCheck object to verify
-// controllerName. For our controller, we check if the message contains
-// known reason strings from the evaluator.
+// resume-readiness controller by matching known message patterns.
 func isResumeReadinessCheckState(acs *kueuev1beta2.AdmissionCheckState) bool {
-	// Check if the message contains any of our known reason strings.
-	// This is a pragmatic approach that avoids an extra API call.
 	knownReasons := []string{
 		resumeac.ReasonInitialLaunchReady,
 		resumeac.ReasonCheckpointReady,
@@ -188,20 +254,14 @@ func isResumeReadinessCheckState(acs *kueuev1beta2.AdmissionCheckState) bool {
 		}
 	}
 
-	// Also check if the state is Pending and we haven't touched it yet.
-	// In that case, we can't tell if it's ours. We need to be conservative:
-	// if ANY admission check is Pending and we don't know if it's ours,
-	// we still should not block on it. So we return false for unknown checks.
 	return false
 }
 
 // containsReason checks if a message string contains a specific reason identifier.
 func containsReason(message, reason string) bool {
-	// The evaluator embeds reason strings in messages. Match against
-	// the message content as set by our evaluator/reconciler.
 	return len(message) > 0 && len(reason) > 0 &&
-		(message == reason || // exact match for simple messages
-			len(message) > len(reason) && // prefix or contains check
+		(message == reason ||
+			len(message) > len(reason) &&
 				(message[:len(reason)] == reason ||
 					containsSubstring(message, reason)))
 }
