@@ -28,6 +28,7 @@ Build on Phase 5's checkpoint-aware priority shaping to:
 - [multikueue-integration.md](multikueue-integration.md) - MultiKueue external-framework integration: manager/worker setup, RBAC, spec.managedBy, mirror-copy execution model
 - [remote-status.md](remote-status.md) - remote status plumbing: approach, status fields, dispatch classification, cluster resolution
 - [shared-checkpoint-store.md](shared-checkpoint-store.md) - shared checkpoint store contract: migration, endpoint validation, design decisions
+- [remote-pause-resume.md](remote-pause-resume.md) - remote pause/resume propagation model: mechanism, flows, difference from single-cluster, controller plumbing
 - [adr/0003-rtj-as-external-framework.md](adr/0003-rtj-as-external-framework.md) - ADR for RTJ as MultiKueue external framework via Kueue's generic adapter
 
 ### API

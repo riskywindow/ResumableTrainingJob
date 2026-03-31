@@ -38,7 +38,16 @@ type phase6RTJView struct {
 		ActiveJobSetName  string `json:"activeJobSetName"`
 		Reason            string `json:"reason"`
 		Message           string `json:"message"`
-		MultiCluster      *struct {
+		LastCompletedCheckpoint *struct {
+			ID          string `json:"id"`
+			ManifestURI string `json:"manifestURI"`
+			StorageURI  string `json:"storageURI"`
+		} `json:"lastCompletedCheckpoint"`
+		SelectedCheckpoint *struct {
+			ID          string `json:"id"`
+			ManifestURI string `json:"manifestURI"`
+		} `json:"selectedCheckpoint"`
+		MultiCluster *struct {
 			DispatchPhase            string `json:"dispatchPhase"`
 			ExecutionCluster         string `json:"executionCluster"`
 			LocalExecutionSuppressed bool   `json:"localExecutionSuppressed"`
@@ -49,8 +58,9 @@ type phase6RTJView struct {
 				Name      string `json:"name"`
 			} `json:"remoteObjectRef"`
 			RemoteCheckpoint *struct {
-				LastCompletedCheckpointID string `json:"lastCompletedCheckpointID"`
-				StorageURI               string `json:"storageURI"`
+				LastCompletedCheckpointID   string `json:"lastCompletedCheckpointID"`
+				LastCompletedCheckpointTime string `json:"lastCompletedCheckpointTime"`
+				StorageURI                  string `json:"storageURI"`
 			} `json:"remoteCheckpoint"`
 		} `json:"multiCluster"`
 	} `json:"status"`
