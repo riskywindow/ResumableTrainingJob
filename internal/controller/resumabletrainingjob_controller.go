@@ -115,6 +115,16 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 	now := r.now()
 	if stopSource, shouldStop := r.requestedStopSource(&job, activeExists); shouldStop {
+		// Phase 7: detect and classify Kueue eviction for startup/recovery tracking.
+		// This must happen before the stop flow so the eviction classification is
+		// recorded before the phase transitions to YieldRequested/Draining.
+		if stopSource == stopSourceKueue && job.Status.WorkloadReference != nil {
+			if evictionChanged := r.detectAndRecordEviction(ctx, &job, now); evictionChanged {
+				if err := r.Status().Update(ctx, &job); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+		}
 		return r.reconcileStopFlow(ctx, &job, activeJobSet, stopSource, now)
 	}
 	if job.Spec.Control == nil || job.Spec.Control.DesiredState != trainingv1alpha1.DesiredStateRunning {
@@ -132,6 +142,10 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 	if activeExists {
 		wasRestoring := job.Status.Phase == trainingv1alpha1.PhaseRestoring
 		statusChanged := markRunning(&job, now)
+		// Phase 7: sync startup recovery state to Running.
+		statusChanged = syncStartupRecoveryOnRunning(&job, now) || statusChanged
+		// Phase 7: clear timeout conditions on successful transition to Running.
+		statusChanged = clearStartupRecoveryTimeoutConditions(&job) || statusChanged
 		if wasRestoring && r.Metrics != nil {
 			r.Metrics.IncResumeSucceeded()
 		}

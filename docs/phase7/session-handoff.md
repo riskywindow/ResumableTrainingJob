@@ -508,3 +508,154 @@ Now implement waitForPodsReady timeout/recovery semantics:
 
 5. Update docs/phase7/session-handoff.md with Session 5 results.
 ```
+
+---
+
+## Session 5: waitForPodsReady Startup/Recovery Integration
+
+**Date**: 2026-03-31
+
+### Mission
+
+Make waitForPodsReady startup timeout and recovery timeout first-class RTJ
+behavior. Detect Kueue eviction conditions, classify them as startup timeout
+vs recovery timeout, and populate the `status.startupRecovery` section.
+
+Hard boundaries:
+- Do not replace Kueue's waitForPodsReady; operator only observes/classifies.
+- Preserve existing pause/preemption/checkpoint-resume semantics.
+- Keep implementation idempotent across reconcile loops and operator restarts.
+
+### Decisions made
+
+1. **Eviction detection placed before stop flow entry.** The controller
+   detects and classifies Kueue eviction conditions in the main `Reconcile()`
+   before entering `reconcileStopFlow()`. This ensures classification is
+   recorded before phase transitions.
+
+2. **Startup vs recovery distinguished via `wasPhaseRunning()`.** Checks
+   both the current phase and the previously recorded `StartupRecovery.
+   StartupState` to handle subsequent reconciles where the phase has already
+   transitioned away from Running.
+
+3. **Six Kueue constants defined locally.** The operator uses string
+   constants matching Kueue v0.15.1's condition type (`Evicted`) and
+   reasons (`PodsReadyTimeout`, `Preempted`, `InactiveWorkload`).
+   This avoids importing Kueue internal packages.
+
+4. **Two mutually exclusive conditions.** `StartupTimeoutEvicted` and
+   `RecoveryTimeoutEvicted` are set/cleared as a pair. Both are cleared
+   when pods successfully reach Running.
+
+5. **Checkpoint semantics preserved unchanged.** Existing code already
+   preserves `lastCompletedCheckpoint` across run attempts. No changes
+   needed. Recovery timeout preserves checkpoint; startup timeout
+   naturally has no checkpoint to clear.
+
+6. **Manual pause completely decoupled.** Manual pause enters via
+   `stopSourceManual` (not `stopSourceKueue`), so eviction detection
+   is never triggered. No confusion possible.
+
+7. **All sync functions are idempotent.** Field-by-field comparison
+   before writing; repeated reconciles produce no spurious status updates.
+
+8. **OQ2 resolved.** Kueue v0.15.1 sets `Evicted` condition with
+   `reason: PodsReadyTimeout` for waitForPodsReady evictions. The reason
+   string is the same for both startup and recovery timeouts; the RTJ
+   operator distinguishes them via prior running state.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| internal/controller/startup_recovery.go | Created: eviction classification, startup state classification, status sync functions, condition management, detectAndRecordEviction reconciler method |
+| internal/controller/startup_recovery_test.go | Created: 32 tests (23 unit + 9 integration) |
+| internal/controller/status_helpers.go | Modified: added startupRecoveryStatusEqual and clearStartupRecoveryTimeoutConditions helpers |
+| internal/controller/resumabletrainingjob_controller.go | Modified: wired eviction detection before stop flow, startup recovery sync on Running transition |
+| internal/controller/resume_flow.go | Modified: added syncStartupRecoveryOnLaunch at 4 launch/resume entry points |
+| docs/phase7/waitforpodsready.md | Created: waitForPodsReady integration documentation |
+| docs/phase7/session-handoff.md | Modified: added Session 5 |
+
+### Tests run
+
+All tests pass across the entire project:
+```
+go test ./internal/controller/ -count=1  -- PASS
+```
+
+### Tests added (32 total)
+
+**Unit tests (23):**
+- `ClassifyEviction` (6): nil workload, no condition, PodsReadyTimeout,
+  Preempted, InactiveWorkload, condition False is not evicted
+- `ClassifyStartupState` (7): startup timeout, recovery timeout,
+  preemption evicted, normal Starting, normal Running, Restoring, not started
+- `syncStartupRecovery` (5): on launch, on running, eviction records reason,
+  idempotent, eviction idempotent
+- `setStartupRecoveryConditions` (3): startup timeout, recovery timeout,
+  cleared on non-timeout
+- `wasPhaseRunning` (3): from phase, from startup recovery state, false
+  when starting
+- `startupRecoveryStatusEqual` (4): both nil, one nil, same values,
+  different state
+
+**Integration tests (9):**
+- Startup timeout classification via full Reconcile loop
+- Recovery timeout classification via full Reconcile loop
+- Normal ready path (Starting -> Running clears conditions)
+- Manual pause not confused with timeout
+- Kueue preemption not confused with timeout
+- Idempotent after operator restart (re-derives same classification)
+- Resume after timeout preserves checkpoint for restore
+- Checkpoint preserved on recovery timeout
+- No workload reference skips eviction detection
+
+### Open issues
+
+1. **OQ1**: Resolved (Session 4).
+2. **OQ2**: Resolved. Kueue v0.15.1 eviction condition is `type: Evicted`,
+   `reason: PodsReadyTimeout`. Same reason for both startup and recovery
+   timeouts; distinguished by prior running state.
+3. **OQ3**: Topology assignment timing -- still open. E2E testing needed.
+4. **OQ4**: ProvisioningRequest cleanup on yield/preemption -- still open.
+5. **OQ5**: Resolved (Session 1).
+6. **OQ6**: Multi-cluster provisioning status mirroring -- should-ship.
+7. **OQ7**: Backoff behavior surfacing -- should-ship.
+8. **OQ8**: Feature gate naming -- still open.
+
+### Recommended next prompt
+
+```
+You are working on Phase 7 Session 6 for the checkpoint-native preemption
+controller repo.
+
+Read docs/phase7/session-handoff.md for context (Sessions 1-5).
+
+Sessions 1-5 completed:
+- Design lock and architecture (Session 1)
+- Launch gate status API with 7 new enum types (Session 2)
+- Provisioning/topology observation layer with 63 tests (Session 3)
+- Provisioning-aware launch gate and podSetUpdates integration (Session 4)
+- waitForPodsReady startup/recovery integration with 32 tests (Session 5)
+
+Now implement the fake ProvisioningRequest backend (G5):
+
+1. Create a minimal controller (separate package) that watches
+   ProvisioningRequest resources and auto-approves them after a
+   configurable delay.
+
+2. Support configurable rejection via annotation
+   (e.g., "rtj.dev/fake-action: reject").
+
+3. Deploy as a separate Deployment (Session 1 Decision 7).
+
+4. Add tests covering:
+   - Auto-approval after delay
+   - Configurable rejection
+   - Multiple concurrent ProvisioningRequests
+   - Idempotent status updates
+
+5. Create deployment manifests (config/fake-provisioning/).
+
+6. Update docs/phase7/session-handoff.md with Session 6 results.
+```
