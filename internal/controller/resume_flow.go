@@ -40,6 +40,8 @@ func (r *ResumableTrainingJobReconciler) reconcileLaunch(
 	}
 
 	changed := markStarting(job, runAttempt, controlConfigMapName, childJobSetName, now)
+	// Phase 7: sync startup recovery state to Starting.
+	changed = syncStartupRecoveryOnLaunch(job, now) || changed
 
 	// Phase 3: sync admission status when admitted counts are available.
 	admittedCounts := parseAdmittedCounts(job)
@@ -106,6 +108,8 @@ func (r *ResumableTrainingJobReconciler) reconcileResume(
 	}
 
 	changed := markRestoring(job, runAttempt, controlConfigMapName, childJobSetName, selectedCheckpoint, now)
+	// Phase 7: sync startup recovery state to Starting (restore is a kind of startup).
+	changed = syncStartupRecoveryOnLaunch(job, now) || changed
 
 	// Phase 3: sync restore status with checkpoint and admitted world sizes.
 	if selectedCheckpoint != nil && selectedCheckpoint.WorldSize > 0 {
@@ -279,6 +283,8 @@ func (r *ResumableTrainingJobReconciler) reconcileLaunchWithGate(
 	}
 
 	changed := markStarting(job, runAttempt, controlConfigMapName, childJobSetName, now)
+	// Phase 7: sync startup recovery state to Starting.
+	changed = syncStartupRecoveryOnLaunch(job, now) || changed
 
 	// Sync Phase 3/4 status fields.
 	if plan.AdmittedCounts != nil {
@@ -353,6 +359,8 @@ func (r *ResumableTrainingJobReconciler) reconcileResumeWithGate(
 	}
 
 	changed := markRestoring(job, runAttempt, controlConfigMapName, childJobSetName, selectedCheckpoint, now)
+	// Phase 7: sync startup recovery state to Starting (restore is a kind of startup).
+	changed = syncStartupRecoveryOnLaunch(job, now) || changed
 
 	// Phase 3/4: sync status fields.
 	if selectedCheckpoint.WorldSize > 0 {

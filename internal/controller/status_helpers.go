@@ -943,3 +943,29 @@ func capacityStatusEqual(left, right *trainingv1alpha1.CapacityStatus) bool {
 	}
 	return left.GuaranteeActive == right.GuaranteeActive && left.Reason == right.Reason
 }
+
+// startupRecoveryStatusEqual compares two StartupRecoveryStatus values for
+// logical equality. Timestamps are compared by value, not pointer identity.
+func startupRecoveryStatusEqual(left, right *trainingv1alpha1.StartupRecoveryStatus) bool {
+	switch {
+	case left == nil && right == nil:
+		return true
+	case left == nil || right == nil:
+		return false
+	}
+	return left.StartupState == right.StartupState &&
+		left.PodsReadyState == right.PodsReadyState &&
+		left.LastLaunchFailureReason == right.LastLaunchFailureReason &&
+		left.LastEvictionReason == right.LastEvictionReason &&
+		left.LastRequeueReason == right.LastRequeueReason &&
+		timesEqual(left.LastTransitionTime, right.LastTransitionTime)
+}
+
+// clearStartupRecoveryTimeoutConditions removes both timeout-specific
+// conditions. Used when the RTJ successfully transitions past the startup
+// phase or when a new run attempt begins.
+func clearStartupRecoveryTimeoutConditions(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	changed := clearCondition(job, conditionTypeStartupTimeoutEvicted)
+	changed = clearCondition(job, conditionTypeRecoveryTimeoutEvicted) || changed
+	return changed
+}
