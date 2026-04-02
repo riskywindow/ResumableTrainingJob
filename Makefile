@@ -42,6 +42,8 @@ PHASE6_TRAINER_IMAGE ?= $(PHASE5_TRAINER_IMAGE)
 .PHONY: e2e-phase6
 .PHONY: phase7-up phase7-down phase7-status phase7-load-images phase7-smoke phase7-profile
 .PHONY: phase7-build-fake-provisioner e2e-phase7
+.PHONY: phase7-submit-success phase7-submit-fail
+.PHONY: phase7-inspect-launchgate phase7-inspect-workload phase7-inspect-provisioningrequest phase7-inspect-checkpoints
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -635,6 +637,38 @@ phase7-profile:
 	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
 	  FAKE_PROVISIONER_IMAGE=$(FAKE_PROVISIONER_IMAGE) \
 	  ./hack/dev/phase7-profile.sh
+
+# ── Phase 7 demo / inspect targets ─────────────────────────────────
+#
+# phase7-submit-success:              Submit a delayed-success provisioning RTJ.
+# phase7-submit-fail:                 Submit a provisioning failure RTJ.
+# phase7-inspect-launchgate:          Inspect launch gate, provisioning state,
+#                                     startup/recovery, and capacity guarantee.
+# phase7-inspect-workload:            Inspect Workload admission, admission checks,
+#                                     podSetUpdates, and child JobSet.
+# phase7-inspect-provisioningrequest: Inspect ProvisioningRequest objects,
+#                                     conditions, parameters, and fake-provisioner logs.
+# phase7-inspect-checkpoints:         Inspect checkpoint evidence, startup/recovery
+#                                     correlation, and child JobSet pod status.
+# e2e-phase7:                         Run Phase 7 e2e tests.
+
+phase7-submit-success:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE7_RTJ_NAME=$(PHASE7_RTJ_NAME) PHASE7_TRAINER_IMAGE=$(PHASE7_TRAINER_IMAGE) ./hack/dev/phase7-submit-success.sh
+
+phase7-submit-fail:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE7_RTJ_NAME=phase7-fail PHASE7_TRAINER_IMAGE=$(PHASE7_TRAINER_IMAGE) ./hack/dev/phase7-submit-fail.sh
+
+phase7-inspect-launchgate:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE7_RTJ_NAME=$(PHASE7_RTJ_NAME) ./hack/dev/phase7-inspect-launchgate.sh
+
+phase7-inspect-workload:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE7_RTJ_NAME=$(PHASE7_RTJ_NAME) ./hack/dev/phase7-inspect-workload.sh
+
+phase7-inspect-provisioningrequest:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE7_RTJ_NAME=$(PHASE7_RTJ_NAME) ./hack/dev/phase7-inspect-provisioningrequest.sh
+
+phase7-inspect-checkpoints:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE7_RTJ_NAME=$(PHASE7_RTJ_NAME) ./hack/dev/phase7-inspect-checkpoints.sh
 
 phase7-build-fake-provisioner:
 	docker build -t $(FAKE_PROVISIONER_IMAGE) -f cmd/fake-provisioner/Dockerfile .

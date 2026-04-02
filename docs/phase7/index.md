@@ -24,7 +24,17 @@ on physical capacity -- not just quota-reserved.
 | [adr/0001-capacity-guaranteed-launch.md](adr/0001-capacity-guaranteed-launch.md) | ADR: launch gate contract and demo scope |
 | [waitforpodsready.md](waitforpodsready.md) | waitForPodsReady startup/recovery integration |
 | [e2e.md](e2e.md) | Phase 7 e2e test coverage and what remains deferred |
+| [demo.md](demo.md) | Step-by-step demo scenarios for capacity-guaranteed launch |
+| [operations.md](operations.md) | Operational inspection procedures |
+| [troubleshooting.md](troubleshooting.md) | Common issues and diagnostic checklist |
 | [adr/0002-launch-gate-status-api.md](adr/0002-launch-gate-status-api.md) | ADR: status-only API design decision |
+| [provisioning-observation.md](provisioning-observation.md) | Provisioning/topology observation layer field-level docs |
+| [launch-gating.md](launch-gating.md) | Phase 7 provisioning-aware launch gating |
+| [dev-environment.md](dev-environment.md) | Phase 7 local dev environment setup |
+| [multicluster-compatibility.md](multicluster-compatibility.md) | Multi-cluster Phase 7 compatibility |
+| [PHASE7_SIGNOFF.md](PHASE7_SIGNOFF.md) | Phase 7 signoff: capabilities, risks, Phase 8 next steps |
+| [review/consistency-audit.md](review/consistency-audit.md) | Audit of implementation against Phase 0-7 contracts |
+| [review/gaps.md](review/gaps.md) | Gaps, drift analysis, and open questions |
 
 ## Pinned dependencies
 

@@ -24,6 +24,8 @@ const (
 	DefaultAllowWorldSizeChange     = false
 	DefaultEnablePartialAdmission   = false
 	DefaultTopologyMode             = TopologyModeDisabled
+	DefaultDeviceMode               = DeviceModeDisabled
+	DefaultDeviceRequestCount int32 = 1
 
 	// MultiKueueControllerName is the well-known managedBy value for Kueue MultiKueue.
 	// When spec.managedBy is set to this value, the RTJ is eligible for MultiKueue
@@ -32,6 +34,9 @@ const (
 
 	// MaxManagedByLength is the maximum allowed length for the managedBy field.
 	MaxManagedByLength = 256
+
+	// MaxClaimNameLength is the maximum allowed length for a device claim name.
+	MaxClaimNameLength = 63
 )
 
 const (
@@ -282,6 +287,113 @@ const (
 	DispatchPhaseActive MultiClusterDispatchPhase = "Active"
 )
 
+// DeviceMode indicates whether DRA device requests are enabled for this RTJ.
+// +kubebuilder:validation:Enum=Disabled;DRA
+type DeviceMode string
+
+const (
+	// DeviceModeDisabled disables DRA device requests. Phase 7 behavior.
+	DeviceModeDisabled DeviceMode = "Disabled"
+
+	// DeviceModeDRA enables native DRA ResourceClaimTemplate generation.
+	// The operator materializes companion ResourceClaimTemplate objects
+	// from the claim templates in spec.devices.claims.
+	DeviceModeDRA DeviceMode = "DRA"
+)
+
+// ClaimAllocationState describes the aggregate allocation state across all
+// ResourceClaimTemplates for this RTJ.
+// +kubebuilder:validation:Enum=Pending;Allocated;Failed;Unknown
+type ClaimAllocationState string
+
+const (
+	// ClaimAllocationPending means one or more ResourceClaimTemplates have
+	// been created but claims are not yet allocated.
+	ClaimAllocationPending ClaimAllocationState = "Pending"
+
+	// ClaimAllocationAllocated means all ResourceClaimTemplates have
+	// claims that have been successfully allocated by the DRA driver.
+	ClaimAllocationAllocated ClaimAllocationState = "Allocated"
+
+	// ClaimAllocationFailed means one or more claim allocations have failed.
+	ClaimAllocationFailed ClaimAllocationState = "Failed"
+
+	// ClaimAllocationUnknown means the allocation state cannot be determined.
+	ClaimAllocationUnknown ClaimAllocationState = "Unknown"
+)
+
+// DeviceSpec declares DRA device requirements for worker pods.
+// When present with mode=DRA, the RTJ operator creates companion
+// ResourceClaimTemplate objects from the claim templates and renders
+// DRA claim references in the child JobSet pod templates.
+// When absent or mode=Disabled, the RTJ follows the Phase 7 path unchanged.
+type DeviceSpec struct {
+	// Mode sets the device allocation mode.
+	// Disabled: no DRA claims (Phase 7 behavior).
+	// DRA: native DRA ResourceClaimTemplate generation.
+	// +kubebuilder:validation:Enum=Disabled;DRA
+	Mode DeviceMode `json:"mode"`
+
+	// Claims is the list of per-worker ResourceClaimTemplate specs.
+	// Each entry produces a companion ResourceClaimTemplate owned by the RTJ.
+	// Required when mode is DRA. Must be empty when mode is Disabled.
+	// Claim names must be unique within this list.
+	// +optional
+	Claims []DeviceClaimSpec `json:"claims,omitempty"`
+}
+
+// DeviceClaimSpec describes a single ResourceClaimTemplate to be
+// materialized by the operator for worker pods. The operator generates
+// a ResourceClaimTemplate named "<rtj-name>-<claim-name>" from the
+// request fragment.
+type DeviceClaimSpec struct {
+	// Name uniquely identifies this claim within the RTJ.
+	// Used as a suffix for the generated ResourceClaimTemplate name:
+	// "<rtj-name>-<name>". Must be a valid DNS subdomain fragment.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Containers lists the container names within the worker pod template
+	// that should receive this claim. Each listed container gets a
+	// resources.claims entry referencing this claim.
+	// +kubebuilder:validation:MinItems=1
+	Containers []string `json:"containers"`
+
+	// Request is the constrained DRA device request fragment that the
+	// operator copies into the generated ResourceClaimTemplate's
+	// spec.spec.devices.requests entry.
+	Request DeviceRequestSpec `json:"request"`
+}
+
+// DeviceRequestSpec is a constrained subset of a DRA DeviceRequest.
+// The operator uses these fields to populate the generated
+// ResourceClaimTemplate. Only the supported DRA fields are exposed;
+// unsupported DRA features must not be configured here.
+type DeviceRequestSpec struct {
+	// DeviceClassName references a DRA DeviceClass installed in the cluster.
+	// Must match a DeviceClass configured in Kueue's deviceClassMappings
+	// for quota accounting.
+	// +kubebuilder:validation:MinLength=1
+	DeviceClassName string `json:"deviceClassName"`
+
+	// Count is the number of devices requested per worker pod for this claim.
+	// Default: 1.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	Count int32 `json:"count,omitempty"`
+
+	// Selectors are optional CEL-expression selectors for device attributes.
+	// Each selector is a CEL expression that evaluates against device
+	// attributes published in the ResourceSlice. All selectors must match
+	// for a device to be eligible.
+	// Example: 'device.attributes["memory"].compareTo(quantity("80Gi")) >= 0'
+	// +optional
+	Selectors []string `json:"selectors,omitempty"`
+}
+
 // TopologySpec declares topology placement requirements for the training job.
 // When set with a mode other than Disabled, the operator includes TopologyRequest
 // on Workload PodSets, enabling Kueue's TopologyAwareScheduling.
@@ -363,6 +475,15 @@ type ResumableTrainingJobSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=256
 	ManagedBy string `json:"managedBy,omitempty"`
+
+	// Devices declares DRA device requirements for worker pods.
+	// When present with mode=DRA, the operator creates companion
+	// ResourceClaimTemplate objects from the claim templates and renders
+	// DRA claim references in the child JobSet pod templates.
+	// When absent or mode=Disabled, the RTJ follows the Phase 7 path
+	// unchanged. No Phase 7 behavior changes when this field is nil.
+	// +optional
+	Devices *DeviceSpec `json:"devices,omitempty"`
 
 	// Control carries the declarative manual pause or resume intent.
 	Control *ControlSpec `json:"control,omitempty"`
@@ -590,6 +711,13 @@ type ResumableTrainingJobStatus struct {
 	// All fields are controller-owned; users must not write to this section.
 	// +optional
 	MultiCluster *MultiClusterStatus `json:"multiCluster,omitempty"`
+
+	// Devices captures the DRA device allocation state for this RTJ.
+	// Populated only when spec.devices is present with mode=DRA.
+	// Nil when devices are not configured (Phase 7 behavior).
+	// All fields are controller-owned.
+	// +optional
+	Devices *DeviceStatus `json:"devices,omitempty"`
 }
 
 // AdmissionStatus captures the admitted shape from Kueue.
@@ -926,6 +1054,76 @@ type RemoteCheckpointSummary struct {
 	StorageURI string `json:"storageURI,omitempty"`
 }
 
+// DeviceStatus captures the DRA device allocation state for this RTJ.
+// All fields are controller-owned; users must not write to this section.
+type DeviceStatus struct {
+	// DeviceMode is the observed device mode from spec.devices.mode.
+	// Empty when spec.devices is nil.
+	// +optional
+	DeviceMode DeviceMode `json:"deviceMode,omitempty"`
+
+	// RequestedDeviceClasses is a deduplicated, sorted summary of all
+	// DeviceClass names referenced across spec.devices.claims.
+	// +optional
+	RequestedDeviceClasses []string `json:"requestedDeviceClasses,omitempty"`
+
+	// CurrentDeviceProfileFingerprint is the SHA256 hash of the current
+	// device profile: sorted device class names concatenated with sorted
+	// CEL selectors from all claims. Used for checkpoint compatibility.
+	// Empty when devices are not configured.
+	// +optional
+	CurrentDeviceProfileFingerprint string `json:"currentDeviceProfileFingerprint,omitempty"`
+
+	// ResourceClaimTemplateRefs lists the materialized ResourceClaimTemplate
+	// objects for the current device spec. Each entry maps a claim name
+	// to the generated ResourceClaimTemplate name.
+	// +optional
+	ResourceClaimTemplateRefs []ResourceClaimTemplateReference `json:"resourceClaimTemplateRefs,omitempty"`
+
+	// ClaimAllocationState is the aggregate allocation state across all
+	// ResourceClaimTemplates for this RTJ.
+	// +optional
+	ClaimAllocationState ClaimAllocationState `json:"claimAllocationState,omitempty"`
+
+	// AllocatedClaimCount is the number of claims that have been
+	// successfully allocated by the DRA driver.
+	// +optional
+	AllocatedClaimCount int32 `json:"allocatedClaimCount,omitempty"`
+
+	// LastClaimFailureReason is the machine-readable reason for the most
+	// recent claim allocation failure.
+	// +optional
+	LastClaimFailureReason string `json:"lastClaimFailureReason,omitempty"`
+
+	// LastClaimFailureTime is when the most recent claim failure occurred.
+	// +optional
+	LastClaimFailureTime *metav1.Time `json:"lastClaimFailureTime,omitempty"`
+
+	// LastCheckpointDeviceProfileFingerprint is the device profile fingerprint
+	// recorded in the most recent completed checkpoint manifest. Empty when
+	// the checkpoint was taken without device spec (Phase 7 behavior).
+	// +optional
+	LastCheckpointDeviceProfileFingerprint string `json:"lastCheckpointDeviceProfileFingerprint,omitempty"`
+
+	// LastResumeDeviceProfileFingerprint is the device profile fingerprint
+	// that was active when the most recent resume was performed.
+	// +optional
+	LastResumeDeviceProfileFingerprint string `json:"lastResumeDeviceProfileFingerprint,omitempty"`
+}
+
+// ResourceClaimTemplateReference maps a DeviceClaimSpec name to the
+// generated ResourceClaimTemplate object.
+type ResourceClaimTemplateReference struct {
+	// Name is the Kubernetes object name of the generated ResourceClaimTemplate.
+	// Follows the pattern "<rtj-name>-<claim-name>".
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// ClaimName is the DeviceClaimSpec.Name that this template was generated from.
+	// +kubebuilder:validation:MinLength=1
+	ClaimName string `json:"claimName"`
+}
+
 // WorkloadReference points at the Kueue Workload owned for the RTJ.
 type WorkloadReference struct {
 	// +optional
@@ -1061,6 +1259,18 @@ func (r *ResumableTrainingJob) Default() {
 	// Phase 4: default topology mode when topology is set but mode is empty.
 	if r.Spec.Topology != nil && r.Spec.Topology.Mode == "" {
 		r.Spec.Topology.Mode = DefaultTopologyMode
+	}
+	// Phase 8: default device mode when devices is set but mode is empty.
+	if r.Spec.Devices != nil && r.Spec.Devices.Mode == "" {
+		r.Spec.Devices.Mode = DefaultDeviceMode
+	}
+	// Phase 8: default device request count when not set.
+	if r.Spec.Devices != nil {
+		for i := range r.Spec.Devices.Claims {
+			if r.Spec.Devices.Claims[i].Request.Count == 0 {
+				r.Spec.Devices.Claims[i].Request.Count = DefaultDeviceRequestCount
+			}
+		}
 	}
 	r.projectKueueLabels()
 }
@@ -1203,6 +1413,9 @@ func (r *ResumableTrainingJob) validationErrors() field.ErrorList {
 	// Phase 6: managedBy validation
 	allErrs = append(allErrs, r.validateManagedBy()...)
 
+	// Phase 8: devices validation
+	allErrs = append(allErrs, r.validateDevices()...)
+
 	return allErrs
 }
 
@@ -1309,6 +1522,100 @@ func (r *ResumableTrainingJob) validateManagedBy() field.ErrorList {
 	}
 
 	return allErrs
+}
+
+func (r *ResumableTrainingJob) validateDevices() field.ErrorList {
+	var allErrs field.ErrorList
+	d := r.Spec.Devices
+	if d == nil {
+		return allErrs
+	}
+	fldPath := field.NewPath("spec", "devices")
+
+	switch d.Mode {
+	case DeviceModeDisabled:
+		if len(d.Claims) > 0 {
+			allErrs = append(allErrs, field.Forbidden(fldPath.Child("claims"),
+				"claims must be empty when mode is Disabled"))
+		}
+	case DeviceModeDRA:
+		if len(d.Claims) == 0 {
+			allErrs = append(allErrs, field.Required(fldPath.Child("claims"),
+				"at least one claim is required when mode is DRA"))
+		}
+		allErrs = append(allErrs, r.validateDeviceClaims(d.Claims, fldPath.Child("claims"))...)
+	default:
+		allErrs = append(allErrs, field.NotSupported(fldPath.Child("mode"), d.Mode,
+			[]string{string(DeviceModeDisabled), string(DeviceModeDRA)}))
+	}
+
+	return allErrs
+}
+
+func (r *ResumableTrainingJob) validateDeviceClaims(claims []DeviceClaimSpec, fldPath *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+	seenNames := make(map[string]bool, len(claims))
+
+	for i, claim := range claims {
+		claimPath := fldPath.Index(i)
+
+		// Name validation
+		if strings.TrimSpace(claim.Name) == "" {
+			allErrs = append(allErrs, field.Required(claimPath.Child("name"),
+				"claim name is required"))
+		} else if len(claim.Name) > MaxClaimNameLength {
+			allErrs = append(allErrs, field.TooLong(claimPath.Child("name"),
+				claim.Name, MaxClaimNameLength))
+		} else if seenNames[claim.Name] {
+			allErrs = append(allErrs, field.Duplicate(claimPath.Child("name"), claim.Name))
+		} else {
+			seenNames[claim.Name] = true
+		}
+
+		// Containers validation
+		if len(claim.Containers) == 0 {
+			allErrs = append(allErrs, field.Required(claimPath.Child("containers"),
+				"at least one container target is required"))
+		}
+		seenContainers := make(map[string]bool, len(claim.Containers))
+		for j, c := range claim.Containers {
+			if strings.TrimSpace(c) == "" {
+				allErrs = append(allErrs, field.Required(
+					claimPath.Child("containers").Index(j),
+					"container name must not be empty"))
+			} else if seenContainers[c] {
+				allErrs = append(allErrs, field.Duplicate(
+					claimPath.Child("containers").Index(j), c))
+			} else {
+				seenContainers[c] = true
+			}
+		}
+
+		// Request validation
+		reqPath := claimPath.Child("request")
+		if strings.TrimSpace(claim.Request.DeviceClassName) == "" {
+			allErrs = append(allErrs, field.Required(reqPath.Child("deviceClassName"),
+				"deviceClassName is required"))
+		}
+		if claim.Request.Count < 0 {
+			allErrs = append(allErrs, field.Invalid(reqPath.Child("count"),
+				claim.Request.Count, "count must be >= 1"))
+		}
+		for k, sel := range claim.Request.Selectors {
+			if strings.TrimSpace(sel) == "" {
+				allErrs = append(allErrs, field.Required(
+					reqPath.Child("selectors").Index(k),
+					"selector must not be empty"))
+			}
+		}
+	}
+
+	return allErrs
+}
+
+// IsDevicesEnabled returns true when DRA device requests are active.
+func (r *ResumableTrainingJob) IsDevicesEnabled() bool {
+	return r.Spec.Devices != nil && r.Spec.Devices.Mode == DeviceModeDRA
 }
 
 // IsManagedByMultiKueue returns true when the RTJ is managed by MultiKueue.
@@ -1492,6 +1799,14 @@ func (s TopologyGateState) String() string {
 
 func (s AdmissionCheckState) String() string {
 	return string(s)
+}
+
+func (d DeviceMode) String() string {
+	return string(d)
+}
+
+func (c ClaimAllocationState) String() string {
+	return string(c)
 }
 
 func (r ResumableTrainingJob) String() string {

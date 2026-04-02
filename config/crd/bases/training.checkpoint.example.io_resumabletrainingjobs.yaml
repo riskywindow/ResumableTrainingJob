@@ -241,6 +241,84 @@ spec:
                     name:
                       type: string
                       minLength: 1
+                # Phase 8: devices
+                devices:
+                  description: >-
+                    Declares DRA device requirements for worker pods.
+                    When present with mode=DRA, the operator creates companion
+                    ResourceClaimTemplate objects. When absent or mode=Disabled,
+                    Phase 7 behavior is preserved unchanged.
+                  type: object
+                  required:
+                    - mode
+                  properties:
+                    mode:
+                      description: >-
+                        Device allocation mode. Disabled: no DRA claims.
+                        DRA: native DRA ResourceClaimTemplate generation.
+                      type: string
+                      enum:
+                        - Disabled
+                        - DRA
+                    claims:
+                      description: >-
+                        Per-worker ResourceClaimTemplate specs. Each entry
+                        produces a companion ResourceClaimTemplate owned by
+                        the RTJ. Required when mode is DRA.
+                      type: array
+                      items:
+                        type: object
+                        required:
+                          - name
+                          - containers
+                          - request
+                        properties:
+                          name:
+                            description: >-
+                              Unique identifier for this claim within the RTJ.
+                              Used as suffix for the generated
+                              ResourceClaimTemplate name.
+                            type: string
+                            minLength: 1
+                            maxLength: 63
+                            pattern: '^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$'
+                          containers:
+                            description: >-
+                              Container names within the worker pod template
+                              that should receive this claim.
+                            type: array
+                            minItems: 1
+                            items:
+                              type: string
+                          request:
+                            description: >-
+                              Constrained DRA device request fragment copied
+                              into the generated ResourceClaimTemplate.
+                            type: object
+                            required:
+                              - deviceClassName
+                            properties:
+                              deviceClassName:
+                                description: >-
+                                  DRA DeviceClass name. Must match a
+                                  DeviceClass installed in the cluster.
+                                type: string
+                                minLength: 1
+                              count:
+                                description: >-
+                                  Number of devices requested per worker pod.
+                                  Default: 1.
+                                type: integer
+                                format: int32
+                                minimum: 1
+                                default: 1
+                              selectors:
+                                description: >-
+                                  CEL-expression selectors for device
+                                  attributes. All selectors must match.
+                                type: array
+                                items:
+                                  type: string
                 control:
                   type: object
                   properties:
@@ -820,3 +898,87 @@ spec:
                         Indicates manager-mode controller has suppressed local
                         child JobSet creation for this MultiKueue-managed RTJ.
                       type: boolean
+                # Phase 8: device status
+                devices:
+                  description: >-
+                    DRA device allocation state. Populated only when
+                    spec.devices is present with mode=DRA. Nil when devices
+                    are not configured. All fields are controller-owned.
+                  type: object
+                  properties:
+                    deviceMode:
+                      description: Observed device mode from spec.devices.mode.
+                      type: string
+                      enum:
+                        - Disabled
+                        - DRA
+                    requestedDeviceClasses:
+                      description: >-
+                        Deduplicated, sorted summary of DeviceClass names
+                        referenced across spec.devices.claims.
+                      type: array
+                      items:
+                        type: string
+                    currentDeviceProfileFingerprint:
+                      description: >-
+                        SHA256 hash of the current device profile for
+                        checkpoint compatibility.
+                      type: string
+                    resourceClaimTemplateRefs:
+                      description: >-
+                        Materialized ResourceClaimTemplate references for the
+                        current device spec.
+                      type: array
+                      items:
+                        type: object
+                        required:
+                          - name
+                          - claimName
+                        properties:
+                          name:
+                            description: >-
+                              Kubernetes object name of the generated
+                              ResourceClaimTemplate.
+                            type: string
+                            minLength: 1
+                          claimName:
+                            description: >-
+                              DeviceClaimSpec.Name that this template was
+                              generated from.
+                            type: string
+                            minLength: 1
+                    claimAllocationState:
+                      description: >-
+                        Aggregate allocation state across all
+                        ResourceClaimTemplates.
+                      type: string
+                      enum:
+                        - Pending
+                        - Allocated
+                        - Failed
+                        - Unknown
+                    allocatedClaimCount:
+                      description: >-
+                        Number of claims successfully allocated by the
+                        DRA driver.
+                      type: integer
+                      format: int32
+                    lastClaimFailureReason:
+                      description: >-
+                        Machine-readable reason for the most recent claim
+                        allocation failure.
+                      type: string
+                    lastClaimFailureTime:
+                      description: When the most recent claim failure occurred.
+                      type: string
+                      format: date-time
+                    lastCheckpointDeviceProfileFingerprint:
+                      description: >-
+                        Device profile fingerprint from the most recent
+                        completed checkpoint.
+                      type: string
+                    lastResumeDeviceProfileFingerprint:
+                      description: >-
+                        Device profile fingerprint active when the most
+                        recent resume was performed.
+                      type: string
