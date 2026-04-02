@@ -208,6 +208,70 @@ func remoteCheckpointSummaryEqual(a, b *trainingv1alpha1.RemoteCheckpointSummary
 }
 
 // -------------------------------------------------------------------------
+// Phase 7: Remote launch summary
+// -------------------------------------------------------------------------
+//
+// When the Kueue adapter mirrors the worker's full .status to the manager
+// RTJ, Phase 7 status fields (launchGate, provisioning, startupRecovery,
+// capacity) are included in the mirror. The manager controller does NOT
+// populate these fields itself — they are entirely worker-sourced.
+//
+// buildRemoteLaunchSummary extracts key Phase 7 indicators from the
+// already-mirrored status for structured logging on the manager side.
+// This enables operators to observe worker-side launch gating, provisioning
+// progress, and capacity guarantees from the manager cluster's logs.
+
+// remoteLaunchSummary captures Phase 7 state extracted from a manager-side
+// RTJ whose status was mirrored from the worker by the Kueue adapter.
+// Used for manager-side observability, not for decision-making.
+type remoteLaunchSummary struct {
+	// LaunchGateState is the worker's launch gate state (Open, Blocked, or empty).
+	LaunchGateState string
+
+	// ProvisioningState is the worker's provisioning state (NotConfigured,
+	// Pending, Provisioned, Failed, or empty).
+	ProvisioningState string
+
+	// CapacityGuaranteeActive is true when the worker reports an active
+	// capacity guarantee (provisioning satisfied + quota reserved).
+	CapacityGuaranteeActive bool
+
+	// StartupState is the worker's startup recovery state (NotStarted,
+	// Starting, Running, StartupTimedOut, etc., or empty).
+	StartupState string
+}
+
+// buildRemoteLaunchSummary extracts a Phase 7 launch summary from the
+// RTJ status. Returns zero values for any field not present (Phase 6
+// workers will have all fields empty).
+func buildRemoteLaunchSummary(job *trainingv1alpha1.ResumableTrainingJob) remoteLaunchSummary {
+	var summary remoteLaunchSummary
+	if job.Status.LaunchGate != nil {
+		summary.LaunchGateState = string(job.Status.LaunchGate.State)
+	}
+	if job.Status.Provisioning != nil {
+		summary.ProvisioningState = string(job.Status.Provisioning.State)
+	}
+	if job.Status.Capacity != nil {
+		summary.CapacityGuaranteeActive = job.Status.Capacity.GuaranteeActive
+	}
+	if job.Status.StartupRecovery != nil {
+		summary.StartupState = string(job.Status.StartupRecovery.StartupState)
+	}
+	return summary
+}
+
+// hasPhase7RemoteStatus returns true when the mirrored status contains
+// any Phase 7 status fields from the worker. This indicates the worker
+// is running with Phase 7 features active.
+func hasPhase7RemoteStatus(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return job.Status.LaunchGate != nil ||
+		job.Status.Provisioning != nil ||
+		job.Status.StartupRecovery != nil ||
+		job.Status.Capacity != nil
+}
+
+// -------------------------------------------------------------------------
 // Remote pause / resume helpers
 // -------------------------------------------------------------------------
 //
