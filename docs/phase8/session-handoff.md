@@ -225,45 +225,205 @@ All API tests pass (60+ tests including 20 new Phase 8 tests):
 - `TestWebhookDeepCopyIndependenceForDeviceSpec`
 - `TestWebhookDeepCopyIndependenceForDeviceStatus`
 
+### Recommended next prompt (superseded by Session 3)
+
+See Session 3 below.
+
+---
+
+## Session 3: Internal DRA model and ResourceClaimTemplate lifecycle
+
+**Date**: 2026-04-01
+
+### Mission
+
+Implement the internal DRA device-profile abstraction and companion
+ResourceClaimTemplate lifecycle for RTJ. Per-Pod ResourceClaimTemplate
+generation only -- no child JobSet rendering or Kueue Workload synthesis
+updates in this session.
+
+### Decisions made
+
+1. **OQ1 resolved: DRA import path is `k8s.io/api/resource/v1beta1`.**
+   k8s.io/api@v0.34.2 provides ResourceClaimTemplate, ResourceClaim,
+   DeviceRequest, DeviceSelector, and CELDeviceSelector at v1beta1
+   (also available at v1, v1beta2, v1alpha3). v1beta1 chosen as the
+   stable beta target matching Kubernetes 1.34.
+
+2. **OQ3 resolved: CEL selector field path confirmed.** The DRA
+   `DeviceSelector` has a `CEL` field containing a `CELDeviceSelector`
+   with an `Expression` string. The RTJ `DeviceRequestSpec.Selectors[]`
+   strings map directly to `DeviceSelector{CEL: &CELDeviceSelector{Expression: sel}}`.
+
+3. **OQ7 resolved: recreate on spec drift.** When `TemplateSpecMatches()`
+   detects that an existing ResourceClaimTemplate's device request spec
+   differs from the desired spec, the operator deletes and recreates
+   the template. In-place update is unsafe because active ResourceClaims
+   reference the template.
+
+4. **Ownership model: one stable template per RTJ claim spec (per-RTJ,
+   not per-run).** Template named `<rtj-name>-<claim-name>`, owned by
+   RTJ with `controller=true, blockOwnerDeletion=true`. Survives child
+   JobSet deletion. See `docs/phase8/dra-template-lifecycle.md` for
+   full rationale.
+
+5. **Device profile fingerprint: SHA256 of canonical sorted entries.**
+   Each claim contributes a canonical entry
+   `class=<className>;selectors=<sorted,joined>;count=<count>`.
+   Entries are sorted, joined with newlines, and hashed. The fingerprint
+   is order-independent across both claims and selectors within claims.
+   Container targets do not affect the fingerprint (they are a rendering
+   concern, not a hardware requirement).
+
+6. **Template labels for discovery and cleanup:**
+   - `training.checkpoint.example.io/rtj-name`: RTJ name
+   - `training.checkpoint.example.io/claim-name`: claim name
+   - `training.checkpoint.example.io/managed-by`: `rtj-operator`
+
+7. **DeviceRequest allocation mode: ExactCount.** All RTJ device
+   requests use `DeviceAllocationModeExactCount` with the user-specified
+   count. The `All` allocation mode is not exposed.
+
+8. **DeviceRequest name: `<claim-name>-req`.** Each claim produces one
+   device request named `<claim-name>-req` within the ResourceClaimTemplate.
+
+9. **Status sync preserves allocation fields.** When `syncDeviceStatus()`
+   updates the device profile (fingerprint, classes, refs), it preserves
+   allocation-tracking fields (`allocatedClaimCount`,
+   `lastClaimFailureReason`, `lastCheckpointDeviceProfileFingerprint`,
+   `lastResumeDeviceProfileFingerprint`) from the existing status.
+
+10. **Orphan cleanup via label selector.** Templates with the RTJ label
+    that are not in the desired set are deleted. Ownership is verified
+    defensively before deletion.
+
+### Open questions resolved
+
+| OQ | Resolution |
+|---|---|
+| OQ1 | `k8s.io/api/resource/v1beta1` -- ResourceClaimTemplate and related types available in k8s.io/api@v0.34.2 |
+| OQ3 | `DeviceSelector{CEL: &CELDeviceSelector{Expression: expr}}` -- confirmed |
+| OQ7 | Recreate (delete + create) on spec drift |
+
+### Open questions remaining
+
+| OQ | Status |
+|---|---|
+| OQ2 | Unresolved -- Kueue deviceClassMappings audit deferred to Workload synthesis session |
+| OQ4 | Unresolved -- Example DRA driver testing deferred to e2e session |
+| OQ8 | Deferred -- multi-device-class supported at API level; single-class-per-claim is Phase 8 scope |
+| OQ9 | Unresolved -- DRA + ProvisioningRequest interaction test deferred to e2e |
+
+### Files changed
+
+| File | Action |
+|---|---|
+| internal/dra/profile.go | Created: DeviceProfile abstraction, BuildProfile(), TemplateNameForClaim(), TemplateRefs() |
+| internal/dra/profile_test.go | Created: 17 tests for fingerprint generation, determinism, order independence, name generation |
+| internal/dra/templates.go | Created: DesiredTemplate, BuildDesiredTemplates(), buildTemplate(), TemplateSpecMatches(), TemplateKey() |
+| internal/dra/templates_test.go | Created: 13 tests for template construction, owner refs, labels, spec matching, determinism |
+| internal/controller/dra_templates.go | Created: reconcileDRATemplates(), reconcileSingleTemplate(), cleanupOrphanedTemplates(), isOwnedByRTJ() |
+| internal/controller/dra_templates_test.go | Created: 22 tests for reconciliation lifecycle (create, idempotent, drift, orphan cleanup, status sync, ownership) |
+| internal/controller/status_helpers.go | Updated: added syncDeviceStatus(), clearDeviceStatus(), deviceStatusEqual(), stringSlicesEqual(), claimTemplateRefsEqual(); added dra import |
+| docs/phase8/dra-template-lifecycle.md | Created: full lifecycle documentation |
+| docs/phase8/session-handoff.md | Updated: Session 3 results |
+
+### Tests run
+
+All tests pass (17 packages, 0 failures):
+
+**New tests (52 total):**
+
+`internal/dra/` (30 tests):
+- `TestBuildProfile_NilDeviceSpec`
+- `TestBuildProfile_DisabledMode`
+- `TestBuildProfile_EmptyClaims`
+- `TestBuildProfile_SingleClaim`
+- `TestBuildProfile_Deterministic`
+- `TestBuildProfile_SelectorOrderIndependent`
+- `TestBuildProfile_ClaimOrderIndependent`
+- `TestBuildProfile_DifferentCountProducesDifferentFingerprint`
+- `TestBuildProfile_DifferentClassProducesDifferentFingerprint`
+- `TestBuildProfile_MultipleClaims_DeviceClassesSorted`
+- `TestBuildProfile_DuplicateDeviceClassDeduped`
+- `TestBuildProfile_ContainersDoNotAffectFingerprint`
+- `TestTemplateNameForClaim`
+- `TestTemplateNameForClaim_Deterministic`
+- `TestTemplateRefs_NilClaims`
+- `TestTemplateRefs_SingleClaim`
+- `TestTemplateRefs_SortedByClaimName`
+- `TestBuildDesiredTemplates_NilDevices`
+- `TestBuildDesiredTemplates_DisabledMode`
+- `TestBuildDesiredTemplates_SingleClaim`
+- `TestBuildDesiredTemplates_MultipleClaims`
+- `TestBuildDesiredTemplates_Labels`
+- `TestBuildDesiredTemplates_NoSelectors`
+- `TestBuildDesiredTemplates_Deterministic`
+- `TestTemplateSpecMatches_Identical`
+- `TestTemplateSpecMatches_DifferentClass`
+- `TestTemplateSpecMatches_DifferentCount`
+- `TestTemplateSpecMatches_DifferentSelectorCount`
+- `TestTemplateSpecMatches_DifferentRequestCount`
+- `TestTemplateKey`
+
+`internal/controller/` (22 new DRA tests):
+- `TestReconcileDRATemplates_NoDevices`
+- `TestReconcileDRATemplates_DisabledMode`
+- `TestReconcileDRATemplates_ClearsStatusWhenDisabled`
+- `TestReconcileDRATemplates_CreatesSingleTemplate`
+- `TestReconcileDRATemplates_CreatesMultipleTemplates`
+- `TestReconcileDRATemplates_Idempotent`
+- `TestReconcileDRATemplates_SpecDriftRecreatesTemplate`
+- `TestReconcileDRATemplates_SpecDriftDifferentClass`
+- `TestReconcileDRATemplates_CleansUpOrphans`
+- `TestReconcileDRATemplates_OwnerReference`
+- `TestReconcileDRATemplates_Labels`
+- `TestReconcileDRATemplates_SyncsDeviceStatus`
+- `TestReconcileDRATemplates_FingerprintStableAcrossReconciles`
+- `TestReconcileDRATemplates_TransitionDRAToDisabled`
+- `TestIsOwnedByRTJ` (4 subtests)
+- `TestSyncDeviceStatus_SetsFields`
+- `TestSyncDeviceStatus_Idempotent`
+- `TestClearDeviceStatus_AlreadyNil`
+- `TestClearDeviceStatus_ClearsExisting`
+- `TestDeviceStatusEqual` (6 subtests)
+- `TestSyncDeviceStatus_PreservesAllocationFields`
+
 ### Recommended next prompt
 
 ```
-You are working on Phase 8 Session 3 for the checkpoint-native preemption
+You are working on Phase 8 Session 4 for the checkpoint-native preemption
 controller repo.
 
-Read docs/phase8/session-handoff.md for context (Session 1 + Session 2).
+Read docs/phase8/session-handoff.md for context (Sessions 1-3).
 
-Session 2 implemented the Phase 8 DRA API:
-- spec.devices with mode (Disabled/DRA), claims array
-- Each claim has name, containers, and a constrained DRA request fragment
-- status.devices with controller-owned allocation tracking
-- Full validation and defaulting
-- 20 new tests passing
+Session 3 implemented:
+- internal/dra/profile.go: DeviceProfile fingerprinting (SHA256, order-independent)
+- internal/dra/templates.go: ResourceClaimTemplate builder from DeviceClaimSpec
+- internal/controller/dra_templates.go: reconcileDRATemplates() lifecycle
+  (create, idempotent, spec-drift recreate, orphan cleanup, status sync)
+- internal/controller/status_helpers.go: syncDeviceStatus(), clearDeviceStatus()
+- 52 new tests, all passing, zero regressions
 
-Now implement the ResourceClaimTemplate reconciliation:
+Now integrate the DRA template lifecycle into the main reconcile loop
+and implement DRA-aware child JobSet rendering:
 
-1. Resolve OQ1: audit k8s.io/api for DRA types. Determine the import
-   path for ResourceClaimTemplate.
+1. Wire reconcileDRATemplates() into the main Reconcile() method:
+   - Call early in the reconcile loop (before launch gate evaluation)
+   - Gate on worker mode (skip for ShouldSuppressRuntime)
+   - Ensure templates are ready before proceeding to launch
 
-2. Resolve OQ2: audit Kueue v0.15.1 for deviceClassMappings.
-
-3. Implement the ResourceClaimTemplate reconciler:
-   - Create ResourceClaimTemplate from DeviceClaimSpec
-   - Set ownerReference to RTJ
-   - Handle create, update (recreate), and garbage collection
-   - Integrate with the launch gate (create before child JobSet)
-
-4. Implement DRA-aware child JobSet rendering:
+2. Implement DRA-aware child JobSet rendering:
    - Inject spec.resourceClaims[] into worker pod template
    - Inject container resources.claims[] for targeted containers
    - Apply after topology and podSetUpdate injection
+   - Use status.devices.resourceClaimTemplateRefs for template names
 
-5. Update status.devices in the reconcile loop:
-   - Set deviceMode, requestedDeviceClasses, fingerprint
-   - Track resourceClaimTemplateRefs
-   - Track claimAllocationState
+3. Add RBAC markers for ResourceClaimTemplate CRUD.
 
-6. Add unit tests for the reconciliation logic.
+4. Update Kueue PodSet synthesis with DRA device request (OQ2 audit).
 
-7. Update docs/phase8/session-handoff.md with Session 3 results.
+5. Add unit tests for rendering and integration.
+
+6. Update docs/phase8/session-handoff.md with Session 4 results.
 ```

@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
+	"github.com/example/checkpoint-native-preemption-controller/internal/dra"
 	"github.com/example/checkpoint-native-preemption-controller/internal/provisioning"
 )
 
@@ -968,4 +969,101 @@ func clearStartupRecoveryTimeoutConditions(job *trainingv1alpha1.ResumableTraini
 	changed := clearCondition(job, conditionTypeStartupTimeoutEvicted)
 	changed = clearCondition(job, conditionTypeRecoveryTimeoutEvicted) || changed
 	return changed
+}
+
+// --- Phase 8: Device status helpers ---
+
+// syncDeviceStatus updates status.devices with the current device profile
+// fingerprint and template references. Returns true when any field changed.
+func syncDeviceStatus(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	profile dra.DeviceProfile,
+	refs []trainingv1alpha1.ResourceClaimTemplateReference,
+) bool {
+	desired := &trainingv1alpha1.DeviceStatus{
+		DeviceMode:                     trainingv1alpha1.DeviceModeDRA,
+		RequestedDeviceClasses:         profile.DeviceClasses,
+		CurrentDeviceProfileFingerprint: profile.Fingerprint,
+		ResourceClaimTemplateRefs:      refs,
+		ClaimAllocationState:           trainingv1alpha1.ClaimAllocationPending,
+	}
+
+	if deviceStatusEqual(job.Status.Devices, desired) {
+		return false
+	}
+
+	// Preserve allocation state fields from existing status if present.
+	if job.Status.Devices != nil {
+		desired.AllocatedClaimCount = job.Status.Devices.AllocatedClaimCount
+		desired.LastClaimFailureReason = job.Status.Devices.LastClaimFailureReason
+		desired.LastClaimFailureTime = job.Status.Devices.LastClaimFailureTime
+		desired.LastCheckpointDeviceProfileFingerprint = job.Status.Devices.LastCheckpointDeviceProfileFingerprint
+		desired.LastResumeDeviceProfileFingerprint = job.Status.Devices.LastResumeDeviceProfileFingerprint
+
+		// Preserve the existing allocation state if it was already set
+		// to something more advanced than Pending.
+		if job.Status.Devices.ClaimAllocationState != "" {
+			desired.ClaimAllocationState = job.Status.Devices.ClaimAllocationState
+		}
+	}
+
+	job.Status.Devices = desired
+	return true
+}
+
+// clearDeviceStatus removes the device status when devices are not
+// configured. Returns true when the status was cleared.
+func clearDeviceStatus(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	if job.Status.Devices == nil {
+		return false
+	}
+	job.Status.Devices = nil
+	return true
+}
+
+// deviceStatusEqual compares two DeviceStatus values for logical equality.
+// Only compares the fields that syncDeviceStatus sets (profile, refs, mode).
+func deviceStatusEqual(left, right *trainingv1alpha1.DeviceStatus) bool {
+	switch {
+	case left == nil && right == nil:
+		return true
+	case left == nil || right == nil:
+		return false
+	}
+	if left.DeviceMode != right.DeviceMode {
+		return false
+	}
+	if left.CurrentDeviceProfileFingerprint != right.CurrentDeviceProfileFingerprint {
+		return false
+	}
+	if !stringSlicesEqual(left.RequestedDeviceClasses, right.RequestedDeviceClasses) {
+		return false
+	}
+	return claimTemplateRefsEqual(left.ResourceClaimTemplateRefs, right.ResourceClaimTemplateRefs)
+}
+
+// stringSlicesEqual compares two string slices for equality.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// claimTemplateRefsEqual compares two ResourceClaimTemplateReference slices.
+func claimTemplateRefsEqual(a, b []trainingv1alpha1.ResourceClaimTemplateReference) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].ClaimName != b[i].ClaimName {
+			return false
+		}
+	}
+	return true
 }
