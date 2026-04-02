@@ -1,0 +1,71 @@
+# Phase 7 e2e: RTJ exercising waitForPodsReady startup timeout path.
+#
+# Targets the phase7-training queue (delayed-success provisioning) but uses
+# a nonexistent container image. This causes pods to enter ImagePullBackOff,
+# triggering Kueue's waitForPodsReady timeout -> eviction -> requeuing.
+#
+# Placeholders:
+#   __RTJ_NAME__         -> unique RTJ name
+#   __DEV_NAMESPACE__    -> target namespace
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase7-training
+spec:
+  suspend: true
+  queueName: phase7-training
+  control:
+    desiredState: Running
+  identity:
+    worldSize: 2
+    image: nonexistent-image:v999.999.999
+    codeVersion: "1"
+    gpuShape: cpu-only
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  metadata:
+                    labels:
+                      app.kubernetes.io/name: rtj-phase7-timeout-e2e
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        # Deliberately nonexistent image to trigger startup failure.
+                        image: nonexistent-image:v999.999.999
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints/__RTJ_NAME__/
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

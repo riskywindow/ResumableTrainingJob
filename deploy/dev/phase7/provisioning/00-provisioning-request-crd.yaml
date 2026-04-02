@@ -1,0 +1,81 @@
+# Minimal dev-only ProvisioningRequest CRD for Phase 7 local testing.
+#
+# In production, this CRD is installed by the cluster-autoscaler or the
+# cloud-provider provisioning backend. This version defines only the fields
+# needed by Kueue v0.15.1's built-in ProvisioningRequest AdmissionCheck
+# controller and our fake backend.
+#
+# API group: autoscaling.x-k8s.io (from cluster-autoscaler project)
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: provisioningrequests.autoscaling.x-k8s.io
+  labels:
+    checkpoint-native.dev/profile: phase7-provisioning
+  annotations:
+    checkpoint-native.dev/note: >-
+      Dev-only CRD. Do not use in production.
+spec:
+  group: autoscaling.x-k8s.io
+  names:
+    kind: ProvisioningRequest
+    listKind: ProvisioningRequestList
+    plural: provisioningrequests
+    singular: provisioningrequest
+    shortNames:
+      - provreq
+      - provreqs
+  scope: Namespaced
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                provisioningClassName:
+                  type: string
+                  description: Name of the provisioning class to use.
+                parameters:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Key-value parameters passed to the provisioning backend.
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                    required:
+                      - type
+                      - status
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Class
+          type: string
+          jsonPath: .spec.provisioningClassName
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

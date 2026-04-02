@@ -40,6 +40,8 @@ PHASE6_TRAINER_IMAGE ?= $(PHASE5_TRAINER_IMAGE)
 .PHONY: phase6-submit phase6-pause phase6-resume
 .PHONY: phase6-inspect-manager phase6-inspect-worker phase6-inspect-checkpoints
 .PHONY: e2e-phase6
+.PHONY: phase7-up phase7-down phase7-status phase7-load-images phase7-smoke phase7-profile
+.PHONY: phase7-build-fake-provisioner e2e-phase7
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -549,3 +551,93 @@ phase6-inspect-checkpoints:
 
 e2e-phase6:
 	RUN_KIND_E2E=1 PHASE6_TRAINER_IMAGE=$(PHASE6_TRAINER_IMAGE) go test ./test/e2e -run 'TestMultiCluster' -v -timeout 30m
+
+# ── Phase 7 targets ──────────────────────────────────────────────────
+#
+# phase7-up:                   Create kind cluster, install base stack, then
+#                              apply Phase 7 capacity-guaranteed launch profile.
+#                              Includes ProvisioningRequest CRD, fake backend,
+#                              Kueue config with waitForPodsReady, and
+#                              provisioning AdmissionCheck wiring.
+# phase7-down:                 Delete the kind cluster.
+# phase7-status:               Show cluster state including provisioning CRD,
+#                              admission checks, queues, fake-provisioner,
+#                              and waitForPodsReady config.
+# phase7-load-images:          Load images into the Phase 7 cluster.
+# phase7-smoke:                Run Phase 7 infrastructure smoke test. Verifies
+#                              ProvisioningRequest API, fake backend, built-in
+#                              AdmissionCheck, waitForPodsReady config, and
+#                              sample RTJ dry-run.
+# phase7-profile:              Apply/re-apply Phase 7 profile on existing cluster.
+# phase7-build-fake-provisioner: Build the fake-provisioner Docker image.
+#
+# The Phase 7 profile exercises:
+#   G1: ProvisioningRequest AdmissionCheck integration (Kueue built-in)
+#   G2: Fake ProvisioningRequest backend (delayed success, failure, expiry)
+#   G3: waitForPodsReady startup timeout and recovery
+#   G4: Deterministic local dev/test profile
+#
+# Sample RTJs in deploy/dev/phase7/samples/:
+#   rtj-delayed-success.yaml   — Successful delayed provisioning (10s)
+#   rtj-provision-failure.yaml — Provisioning permanent failure
+#   rtj-startup-timeout.yaml   — waitForPodsReady timeout path
+
+PHASE7_RTJ_NAME ?= phase7-demo
+PHASE7_TRAINER_IMAGE ?= $(PHASE6_TRAINER_IMAGE)
+FAKE_PROVISIONER_IMAGE ?= fake-provisioner:dev
+
+phase7-up:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/dev-up.sh
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  FAKE_PROVISIONER_IMAGE=$(FAKE_PROVISIONER_IMAGE) \
+	  ./hack/dev/install-phase7-profile.sh
+
+phase7-down:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-down.sh
+
+phase7-status:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/status.sh
+	@echo
+	@echo "phase7 provisioning request CRD:"
+	@kubectl get crd provisioningrequests.autoscaling.x-k8s.io --no-headers --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (not installed)"
+	@echo
+	@echo "phase7 admission checks:"
+	@kubectl get admissionchecks.kueue.x-k8s.io -l checkpoint-native.dev/profile=phase7-provisioning --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+	@echo "phase7 provisioning request configs:"
+	@kubectl get provisioningrequestconfigs.kueue.x-k8s.io -l checkpoint-native.dev/profile=phase7-provisioning --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+	@echo "phase7 queues:"
+	@kubectl get clusterqueues.kueue.x-k8s.io phase7-cq --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@kubectl get localqueues.kueue.x-k8s.io -n $(DEV_NAMESPACE) phase7-training --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+	@echo "phase7 fake-provisioner:"
+	@kubectl -n $(DEV_NAMESPACE) get deployment fake-provisioner --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (not deployed)"
+	@echo
+	@echo "phase7 provisioning requests:"
+	@kubectl get provisioningrequests.autoscaling.x-k8s.io -n $(DEV_NAMESPACE) --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+
+phase7-load-images:
+	@set -euo pipefail; \
+	for image in $(IMAGES) $(FAKE_PROVISIONER_IMAGE); do \
+		echo "loading $$image into kind cluster $(KIND_CLUSTER_NAME)"; \
+		kind load docker-image --name $(KIND_CLUSTER_NAME) "$$image"; \
+	done
+
+phase7-smoke:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/phase7-smoke.sh
+
+phase7-profile:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  FAKE_PROVISIONER_IMAGE=$(FAKE_PROVISIONER_IMAGE) \
+	  ./hack/dev/phase7-profile.sh
+
+phase7-build-fake-provisioner:
+	docker build -t $(FAKE_PROVISIONER_IMAGE) -f cmd/fake-provisioner/Dockerfile .
+
+e2e-phase7:
+	RUN_KIND_E2E=1 PHASE7_TRAINER_IMAGE=$(PHASE7_TRAINER_IMAGE) go test ./test/e2e -run 'TestCapacityGuaranteedLaunch|TestProvisioningFailureRequeue|TestWaitForPodsReadyTimeout' -v -timeout 20m

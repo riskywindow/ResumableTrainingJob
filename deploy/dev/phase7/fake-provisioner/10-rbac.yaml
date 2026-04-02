@@ -1,0 +1,41 @@
+# RBAC for the fake provisioner.
+#
+# The fake provisioner needs to watch and update ProvisioningRequest
+# objects (autoscaling.x-k8s.io). It also needs to read events for
+# controller-runtime leader election.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fake-provisioner
+  labels:
+    app.kubernetes.io/name: fake-provisioner
+    checkpoint-native.dev/profile: phase7-provisioning
+rules:
+  # ProvisioningRequest watch/get/list/update.
+  - apiGroups: ["autoscaling.x-k8s.io"]
+    resources: ["provisioningrequests"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling.x-k8s.io"]
+    resources: ["provisioningrequests/status"]
+    verbs: ["get", "update", "patch"]
+  # Events for controller-runtime.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fake-provisioner
+  labels:
+    app.kubernetes.io/name: fake-provisioner
+    checkpoint-native.dev/profile: phase7-provisioning
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fake-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: fake-provisioner
+    namespace: checkpoint-dev

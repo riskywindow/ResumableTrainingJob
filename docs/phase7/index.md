@@ -23,6 +23,7 @@ on physical capacity -- not just quota-reserved.
 | [api.md](api.md) | Phase 7 API reference (new status fields) |
 | [adr/0001-capacity-guaranteed-launch.md](adr/0001-capacity-guaranteed-launch.md) | ADR: launch gate contract and demo scope |
 | [waitforpodsready.md](waitforpodsready.md) | waitForPodsReady startup/recovery integration |
+| [e2e.md](e2e.md) | Phase 7 e2e test coverage and what remains deferred |
 | [adr/0002-launch-gate-status-api.md](adr/0002-launch-gate-status-api.md) | ADR: status-only API design decision |
 
 ## Pinned dependencies
