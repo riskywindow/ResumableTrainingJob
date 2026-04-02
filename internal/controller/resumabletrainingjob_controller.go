@@ -105,6 +105,17 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 	// Phase 6: In manager mode, suppress the entire runtime path for RTJs
 	// managed by MultiKueue. The manager reconciles intent and status only;
 	// runtime execution is delegated to a remote worker cluster.
+	//
+	// Phase 7 multi-cluster compatibility:
+	//   - Manager mode: local runtime is suppressed. Phase 7 worker status
+	//     (launchGate, provisioning, startupRecovery, capacity) is surfaced
+	//     transparently via the adapter's full-status mirror. The manager
+	//     does NOT evaluate launch gates or create ProvisioningRequests.
+	//   - Worker mode: the full Phase 7 path runs unchanged. Launch gating,
+	//     provisioning-aware gates, topology second-pass, waitForPodsReady
+	//     semantics, and podSetUpdates all apply identically to single-cluster
+	//     mode. The worker-side RTJ (created by the adapter) goes through
+	//     the same Reconcile path below.
 	if ShouldSuppressRuntime(r.Mode, &job) {
 		return r.reconcileManagerIntent(ctx, &job)
 	}
@@ -443,6 +454,19 @@ func (r *ResumableTrainingJobReconciler) reconcileManagerIntent(
 		"localExecutionSuppressed", mc.LocalExecutionSuppressed,
 		"pauseRequested", pauseRequested,
 	)
+
+	// Phase 7: log worker-side launch/provisioning status when the adapter
+	// has mirrored Phase 7 fields. This surfaces worker-side launch gating,
+	// provisioning progress, and capacity guarantees on the manager cluster.
+	if hasRemoteStatusSignal(job) && hasPhase7RemoteStatus(job) {
+		summary := buildRemoteLaunchSummary(job)
+		logger.Info("manager mode: remote Phase 7 launch status (from worker)",
+			"remoteLaunchGateState", summary.LaunchGateState,
+			"remoteProvisioningState", summary.ProvisioningState,
+			"remoteCapacityGuarantee", summary.CapacityGuaranteeActive,
+			"remoteStartupState", summary.StartupState,
+		)
+	}
 
 	// Requeue during transitional states to ensure timely convergence.
 	if pauseRequested && hasRemoteStatusSignal(job) {
