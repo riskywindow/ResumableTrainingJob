@@ -14,9 +14,10 @@ const (
 )
 
 type Recorder struct {
-	mu        sync.Mutex
-	phases    map[string]string
-	workloads map[string]workloadObservation
+	mu              sync.Mutex
+	phases          map[string]string
+	workloads       map[string]workloadObservation
+	launchGateState map[string]string
 }
 
 type workloadObservation struct {
@@ -456,6 +457,82 @@ var (
 			Help:      "Total failures accessing the shared checkpoint store.",
 		},
 	)
+
+	// Phase 7 metrics.
+	rtjsByLaunchGateState = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "rtjs_by_launch_gate_state",
+			Help:      "Current ResumableTrainingJobs by launch gate state (Open, Blocked, Unknown).",
+		},
+		[]string{"state"},
+	)
+	provisioningStatesObserved = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "provisioning_states_observed_total",
+			Help:      "Total provisioning state observations by state (NotConfigured, Pending, Provisioned, Failed).",
+		},
+		[]string{"state"},
+	)
+	launchesBlockedByProvisioning = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "launches_blocked_by_provisioning_total",
+			Help:      "Total launches blocked because the ProvisioningRequest AdmissionCheck is not yet Ready.",
+		},
+	)
+	launchesBlockedByDelayedTopology = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "launches_blocked_by_delayed_topology_total",
+			Help:      "Total launches blocked because topology second-pass assignment is still pending.",
+		},
+	)
+	startupTimeoutEvents = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "startup_timeout_events_total",
+			Help:      "Total waitForPodsReady startup timeout evictions observed.",
+		},
+	)
+	recoveryTimeoutEvents = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "recovery_timeout_events_total",
+			Help:      "Total waitForPodsReady recovery timeout evictions observed.",
+		},
+	)
+	capacityGuaranteedLaunches = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "capacity_guaranteed_launches_total",
+			Help:      "Total successful capacity-guaranteed launches (provisioning AC Ready → child JobSet created).",
+		},
+	)
+	fakeProvisionerObservations = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "fake_provisioner_observations_total",
+			Help:      "Total ProvisioningRequest observations by the fake provisioner backend.",
+		},
+	)
+	fakeProvisionerFailures = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "fake_provisioner_failures_total",
+			Help:      "Total failures (permanent rejection) set by the fake provisioner backend.",
+		},
+	)
 )
 
 func NewRecorder() *Recorder {
@@ -516,10 +593,21 @@ func NewRecorder() *Recorder {
 			remoteResumeEvents,
 			remoteCheckpointObservations,
 			sharedStoreAccessFailures,
+			// Phase 7
+			rtjsByLaunchGateState,
+			provisioningStatesObserved,
+			launchesBlockedByProvisioning,
+			launchesBlockedByDelayedTopology,
+			startupTimeoutEvents,
+			recoveryTimeoutEvents,
+			capacityGuaranteedLaunches,
+			fakeProvisionerObservations,
+			fakeProvisionerFailures,
 		)
 		recorder = &Recorder{
-			phases:    map[string]string{},
-			workloads: map[string]workloadObservation{},
+			phases:          map[string]string{},
+			workloads:       map[string]workloadObservation{},
+			launchGateState: map[string]string{},
 		}
 	})
 	return recorder
@@ -952,5 +1040,98 @@ func (r *Recorder) IncRemoteCheckpointObservation() {
 func (r *Recorder) IncSharedStoreAccessFailure() {
 	if r != nil {
 		sharedStoreAccessFailures.Inc()
+	}
+}
+
+// Phase 7 recorder methods.
+
+// ObserveLaunchGateState tracks the current RTJ's launch gate state gauge.
+func (r *Recorder) ObserveLaunchGateState(rtjKey, state string) {
+	if r == nil || rtjKey == "" || state == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	previous, ok := r.launchGateState[rtjKey]
+	if ok && previous == state {
+		return
+	}
+	if ok && previous != "" {
+		rtjsByLaunchGateState.WithLabelValues(previous).Dec()
+	}
+	rtjsByLaunchGateState.WithLabelValues(state).Inc()
+	r.launchGateState[rtjKey] = state
+}
+
+// RemoveLaunchGateState cleans up the launch gate state gauge for a removed RTJ.
+func (r *Recorder) RemoveLaunchGateState(rtjKey string) {
+	if r == nil || rtjKey == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	previous, ok := r.launchGateState[rtjKey]
+	if !ok || previous == "" {
+		return
+	}
+	rtjsByLaunchGateState.WithLabelValues(previous).Dec()
+	delete(r.launchGateState, rtjKey)
+}
+
+// ObserveProvisioningState records a provisioning state observation.
+func (r *Recorder) ObserveProvisioningState(state string) {
+	if r != nil && state != "" {
+		provisioningStatesObserved.WithLabelValues(state).Inc()
+	}
+}
+
+// IncLaunchBlockedByProvisioning records a launch blocked by provisioning.
+func (r *Recorder) IncLaunchBlockedByProvisioning() {
+	if r != nil {
+		launchesBlockedByProvisioning.Inc()
+	}
+}
+
+// IncLaunchBlockedByDelayedTopology records a launch blocked by delayed topology.
+func (r *Recorder) IncLaunchBlockedByDelayedTopology() {
+	if r != nil {
+		launchesBlockedByDelayedTopology.Inc()
+	}
+}
+
+// IncStartupTimeoutEvent records a waitForPodsReady startup timeout eviction.
+func (r *Recorder) IncStartupTimeoutEvent() {
+	if r != nil {
+		startupTimeoutEvents.Inc()
+	}
+}
+
+// IncRecoveryTimeoutEvent records a waitForPodsReady recovery timeout eviction.
+func (r *Recorder) IncRecoveryTimeoutEvent() {
+	if r != nil {
+		recoveryTimeoutEvents.Inc()
+	}
+}
+
+// IncCapacityGuaranteedLaunch records a successful capacity-guaranteed launch.
+func (r *Recorder) IncCapacityGuaranteedLaunch() {
+	if r != nil {
+		capacityGuaranteedLaunches.Inc()
+	}
+}
+
+// IncFakeProvisionerObservation records a fake provisioner backend observation.
+func (r *Recorder) IncFakeProvisionerObservation() {
+	if r != nil {
+		fakeProvisionerObservations.Inc()
+	}
+}
+
+// IncFakeProvisionerFailure records a fake provisioner permanent rejection.
+func (r *Recorder) IncFakeProvisionerFailure() {
+	if r != nil {
+		fakeProvisionerFailures.Inc()
 	}
 }

@@ -563,6 +563,11 @@ func (in *ResumableTrainingJobSpec) DeepCopyInto(out *ResumableTrainingJobSpec) 
 		*out = new(PriorityPolicyReference)
 		**out = **in
 	}
+	if in.Devices != nil {
+		in, out := &in.Devices, &out.Devices
+		*out = new(DeviceSpec)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Control != nil {
 		in, out := &in.Control, &out.Control
 		*out = new(ControlSpec)
@@ -664,6 +669,11 @@ func (in *ResumableTrainingJobStatus) DeepCopyInto(out *ResumableTrainingJobStat
 		*out = new(MultiClusterStatus)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.Devices != nil {
+		in, out := &in.Devices, &out.Devices
+		*out = new(DeviceStatus)
+		(*in).DeepCopyInto(*out)
+	}
 }
 
 func (in *ResumableTrainingJobStatus) DeepCopy() *ResumableTrainingJobStatus {
@@ -749,6 +759,105 @@ func (in *WorkloadReference) DeepCopy() *WorkloadReference {
 		return nil
 	}
 	out := new(WorkloadReference)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// --- Phase 8 deep copy ---
+
+func (in *DeviceSpec) DeepCopyInto(out *DeviceSpec) {
+	*out = *in
+	if in.Claims != nil {
+		in, out := &in.Claims, &out.Claims
+		*out = make([]DeviceClaimSpec, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *DeviceSpec) DeepCopy() *DeviceSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(DeviceSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DeviceClaimSpec) DeepCopyInto(out *DeviceClaimSpec) {
+	*out = *in
+	if in.Containers != nil {
+		in, out := &in.Containers, &out.Containers
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	in.Request.DeepCopyInto(&out.Request)
+}
+
+func (in *DeviceClaimSpec) DeepCopy() *DeviceClaimSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(DeviceClaimSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DeviceRequestSpec) DeepCopyInto(out *DeviceRequestSpec) {
+	*out = *in
+	if in.Selectors != nil {
+		in, out := &in.Selectors, &out.Selectors
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+}
+
+func (in *DeviceRequestSpec) DeepCopy() *DeviceRequestSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(DeviceRequestSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DeviceStatus) DeepCopyInto(out *DeviceStatus) {
+	*out = *in
+	if in.RequestedDeviceClasses != nil {
+		in, out := &in.RequestedDeviceClasses, &out.RequestedDeviceClasses
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.ResourceClaimTemplateRefs != nil {
+		in, out := &in.ResourceClaimTemplateRefs, &out.ResourceClaimTemplateRefs
+		*out = make([]ResourceClaimTemplateReference, len(*in))
+		copy(*out, *in)
+	}
+	if in.LastClaimFailureTime != nil {
+		in, out := &in.LastClaimFailureTime, &out.LastClaimFailureTime
+		*out = (*in).DeepCopy()
+	}
+}
+
+func (in *DeviceStatus) DeepCopy() *DeviceStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(DeviceStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ResourceClaimTemplateReference) DeepCopyInto(out *ResourceClaimTemplateReference) {
+	*out = *in
+}
+
+func (in *ResourceClaimTemplateReference) DeepCopy() *ResourceClaimTemplateReference {
+	if in == nil {
+		return nil
+	}
+	out := new(ResourceClaimTemplateReference)
 	in.DeepCopyInto(out)
 	return out
 }

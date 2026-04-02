@@ -138,6 +138,7 @@ func main() {
 		"phase5Metrics", true,
 		"phase6Metrics", true,
 		"phase6OperatorMode", string(operatorMode),
+		"phase7Metrics", true,
 		"resumeReadinessControllerName", resumeac.ControllerName,
 	)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {

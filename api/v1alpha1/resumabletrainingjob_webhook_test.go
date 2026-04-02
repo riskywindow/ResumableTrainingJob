@@ -1032,6 +1032,686 @@ func TestWebhookDefaultDoesNotInjectPhase7Status(t *testing.T) {
 	}
 }
 
+// --- Phase 8 webhook tests: DRA device requests ---
+
+func TestWebhookDefaultPreservesPhase7SpecWithoutDevices(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = nil
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	// Phase 7 spec should pass without devices.
+	if job.Spec.Devices != nil {
+		t.Fatalf("expected devices to remain nil for Phase 7 backward compat")
+	}
+}
+
+func TestWebhookDefaultSetsDeviceModeWhenEmpty(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{} // mode empty
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	if job.Spec.Devices.Mode != DefaultDeviceMode {
+		t.Fatalf("expected device mode to default to %q, got %q", DefaultDeviceMode, job.Spec.Devices.Mode)
+	}
+}
+
+func TestWebhookDefaultPreservesExplicitDeviceMode(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+			},
+		}},
+	}
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	if job.Spec.Devices.Mode != DeviceModeDRA {
+		t.Fatalf("expected device mode to stay %q, got %q", DeviceModeDRA, job.Spec.Devices.Mode)
+	}
+}
+
+func TestWebhookDefaultSetsDeviceRequestCount(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				// Count not set -> should default to 1.
+			},
+		}},
+	}
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	if job.Spec.Devices.Claims[0].Request.Count != DefaultDeviceRequestCount {
+		t.Fatalf("expected device request count to default to %d, got %d",
+			DefaultDeviceRequestCount, job.Spec.Devices.Claims[0].Request.Count)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsDRADeviceSpec(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				Count:           8,
+				Selectors: []string{
+					`device.attributes["memory"].compareTo(quantity("80Gi")) >= 0`,
+				},
+			},
+		}},
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected DRA device spec to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsMultipleClaims(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{
+			{
+				Name:       "gpu",
+				Containers: []string{"worker"},
+				Request: DeviceRequestSpec{
+					DeviceClassName: "gpu.example.com",
+					Count:           4,
+				},
+			},
+			{
+				Name:       "rdma",
+				Containers: []string{"worker"},
+				Request: DeviceRequestSpec{
+					DeviceClassName: "rdma.example.com",
+					Count:           1,
+				},
+			},
+		},
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected multiple claims to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsDeviceDisabled(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDisabled,
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected Disabled device spec to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsDRAWithoutClaims(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode:   DeviceModeDRA,
+		Claims: nil, // empty claims
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject DRA mode without claims")
+	}
+	if !strings.Contains(err.Error(), "claims") {
+		t.Fatalf("expected error about claims, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsDisabledWithClaims(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDisabled,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				Count:           1,
+			},
+		}},
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject Disabled mode with claims")
+	}
+	if !strings.Contains(err.Error(), "claims") {
+		t.Fatalf("expected error about claims, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsDuplicateClaimNames(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{
+			{
+				Name:       "gpu",
+				Containers: []string{"worker"},
+				Request: DeviceRequestSpec{
+					DeviceClassName: "gpu.example.com",
+					Count:           1,
+				},
+			},
+			{
+				Name:       "gpu", // duplicate
+				Containers: []string{"sidecar"},
+				Request: DeviceRequestSpec{
+					DeviceClassName: "gpu-b.example.com",
+					Count:           1,
+				},
+			},
+		},
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject duplicate claim names")
+	}
+	if !strings.Contains(err.Error(), "Duplicate") {
+		t.Fatalf("expected duplicate error, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsEmptyContainers(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: nil, // empty
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				Count:           1,
+			},
+		}},
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject empty containers")
+	}
+	if !strings.Contains(err.Error(), "containers") {
+		t.Fatalf("expected error about containers, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsMissingDeviceClassName(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "", // missing
+				Count:           1,
+			},
+		}},
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject missing deviceClassName")
+	}
+	if !strings.Contains(err.Error(), "deviceClassName") {
+		t.Fatalf("expected error about deviceClassName, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsEmptySelector(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				Count:           1,
+				Selectors:       []string{"  "}, // whitespace-only
+			},
+		}},
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject empty selector")
+	}
+	if !strings.Contains(err.Error(), "selector") {
+		t.Fatalf("expected error about selector, got %v", err)
+	}
+}
+
+func TestWebhookDefaultDoesNotInjectPhase8Status(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				Count:           1,
+			},
+		}},
+	}
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	// Defaulting must NOT inject Phase 8 device status.
+	if job.Status.Devices != nil {
+		t.Fatalf("webhook defaulting must not inject devices status")
+	}
+}
+
+func TestWebhookValidateUpdatePreservesPhase8StatusFields(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	oldJob := minimalValidRTJ()
+	oldJob.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				Count:           8,
+			},
+		}},
+	}
+	oldJob.Spec.Suspend = ptr.To(true)
+	oldJob.Default()
+
+	// Simulate controller setting Phase 8 status.
+	oldJob.Status.Devices = &DeviceStatus{
+		DeviceMode:                      DeviceModeDRA,
+		RequestedDeviceClasses:          []string{"gpu.example.com"},
+		CurrentDeviceProfileFingerprint: "sha256:abc123",
+		ClaimAllocationState:            ClaimAllocationPending,
+		ResourceClaimTemplateRefs: []ResourceClaimTemplateReference{
+			{Name: "example-gpu", ClaimName: "gpu"},
+		},
+	}
+
+	newJob := oldJob.DeepCopy()
+	// User-only change: update desiredState.
+	newJob.Spec.Control.DesiredState = DesiredStatePaused
+
+	if _, err := wh.ValidateUpdate(context.Background(), oldJob, newJob); err != nil {
+		t.Fatalf("expected update with Phase 8 status to succeed, got %v", err)
+	}
+
+	// Status fields are not cleared by webhook validation.
+	if newJob.Status.Devices == nil {
+		t.Fatalf("expected devices status to be preserved through webhook")
+	}
+	if newJob.Status.Devices.DeviceMode != DeviceModeDRA {
+		t.Fatalf("expected devices status mode to be preserved")
+	}
+	if newJob.Status.Devices.CurrentDeviceProfileFingerprint != "sha256:abc123" {
+		t.Fatalf("expected device fingerprint to be preserved")
+	}
+}
+
+func TestWebhookValidateCreateAcceptsPhase7ManifestForPhase8(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Full Phase 7 spec with all features enabled, no devices.
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		PodSetName:             "trainer",
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{
+		Name: "aggressive-shaping",
+	}
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Spec.Devices = nil // Phase 7: no devices
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected full Phase 7 spec to pass Phase 8 validation, got %v", err)
+	}
+
+	// Devices must remain nil.
+	if job.Spec.Devices != nil {
+		t.Fatalf("expected devices to stay nil for Phase 7 backward compatibility")
+	}
+}
+
+func TestWebhookValidateCreateAcceptsFullPhase8Spec(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Full Phase 8 spec with all optional features enabled.
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		PodSetName:             "trainer",
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{
+		Name: "aggressive-shaping",
+	}
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{
+			{
+				Name:       "gpu",
+				Containers: []string{"worker"},
+				Request: DeviceRequestSpec{
+					DeviceClassName: "gpu.example.com",
+					Count:           8,
+					Selectors: []string{
+						`device.attributes["memory"].compareTo(quantity("80Gi")) >= 0`,
+					},
+				},
+			},
+		},
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected full Phase 8 spec to pass validation, got %v", err)
+	}
+}
+
+func TestIsDevicesEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		devices *DeviceSpec
+		want    bool
+	}{
+		{name: "nil devices", devices: nil, want: false},
+		{name: "disabled", devices: &DeviceSpec{Mode: DeviceModeDisabled}, want: false},
+		{name: "dra", devices: &DeviceSpec{Mode: DeviceModeDRA}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := minimalValidRTJ()
+			job.Spec.Devices = tt.devices
+			if got := job.IsDevicesEnabled(); got != tt.want {
+				t.Fatalf("IsDevicesEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWebhookValidateCreateRejectsDuplicateContainerNames(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker", "worker"}, // duplicate
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				Count:           1,
+			},
+		}},
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject duplicate container names")
+	}
+	if !strings.Contains(err.Error(), "Duplicate") {
+		t.Fatalf("expected duplicate error, got %v", err)
+	}
+}
+
+func TestWebhookDeepCopyIndependenceForDeviceSpec(t *testing.T) {
+	job := minimalValidRTJ()
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				Count:           8,
+				Selectors: []string{
+					"expr1",
+					"expr2",
+				},
+			},
+		}},
+	}
+
+	copied := job.DeepCopy()
+
+	// Mutate the copy.
+	copied.Spec.Devices.Mode = DeviceModeDisabled
+	copied.Spec.Devices.Claims[0].Name = "modified"
+	copied.Spec.Devices.Claims[0].Containers[0] = "modified"
+	copied.Spec.Devices.Claims[0].Request.DeviceClassName = "modified"
+	copied.Spec.Devices.Claims[0].Request.Selectors[0] = "modified"
+
+	// Original should be unchanged.
+	if job.Spec.Devices.Mode != DeviceModeDRA {
+		t.Fatalf("deep copy mutation leaked to original: mode")
+	}
+	if job.Spec.Devices.Claims[0].Name != "gpu" {
+		t.Fatalf("deep copy mutation leaked to original: claim name")
+	}
+	if job.Spec.Devices.Claims[0].Containers[0] != "worker" {
+		t.Fatalf("deep copy mutation leaked to original: container name")
+	}
+	if job.Spec.Devices.Claims[0].Request.DeviceClassName != "gpu.example.com" {
+		t.Fatalf("deep copy mutation leaked to original: deviceClassName")
+	}
+	if job.Spec.Devices.Claims[0].Request.Selectors[0] != "expr1" {
+		t.Fatalf("deep copy mutation leaked to original: selectors")
+	}
+}
+
+func TestWebhookDeepCopyIndependenceForDeviceStatus(t *testing.T) {
+	job := minimalValidRTJ()
+	job.Status.Devices = &DeviceStatus{
+		DeviceMode:                      DeviceModeDRA,
+		RequestedDeviceClasses:          []string{"gpu.example.com"},
+		CurrentDeviceProfileFingerprint: "sha256:abc",
+		ResourceClaimTemplateRefs: []ResourceClaimTemplateReference{
+			{Name: "example-gpu", ClaimName: "gpu"},
+		},
+		ClaimAllocationState: ClaimAllocationAllocated,
+		AllocatedClaimCount:  1,
+	}
+
+	copied := job.DeepCopy()
+
+	// Mutate the copy.
+	copied.Status.Devices.DeviceMode = DeviceModeDisabled
+	copied.Status.Devices.RequestedDeviceClasses[0] = "modified"
+	copied.Status.Devices.ResourceClaimTemplateRefs[0].Name = "modified"
+
+	// Original should be unchanged.
+	if job.Status.Devices.DeviceMode != DeviceModeDRA {
+		t.Fatalf("deep copy mutation leaked to original: deviceMode")
+	}
+	if job.Status.Devices.RequestedDeviceClasses[0] != "gpu.example.com" {
+		t.Fatalf("deep copy mutation leaked to original: requestedDeviceClasses")
+	}
+	if job.Status.Devices.ResourceClaimTemplateRefs[0].Name != "example-gpu" {
+		t.Fatalf("deep copy mutation leaked to original: resourceClaimTemplateRefs")
+	}
+}
+
 func webhookTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
