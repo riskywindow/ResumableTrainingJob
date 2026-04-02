@@ -1,0 +1,42 @@
+# Auxiliary queue for provisioning-failure sample RTJs.
+#
+# This uses the dev-provisioning-failure AdmissionCheck (failed.fake.dev class)
+# which causes the fake backend to immediately reject ProvisioningRequests.
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: phase7-failure-cq
+  labels:
+    checkpoint-native.dev/profile: phase7-provisioning
+spec:
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+      flavors:
+        - name: default-flavor
+          resources:
+            - name: cpu
+              nominalQuota: 500m
+            - name: memory
+              nominalQuota: 512Mi
+  admissionChecksStrategy:
+    admissionChecks:
+      - name: dev-provisioning-failure
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Never
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: phase7-failure-training
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: phase7-provisioning
+spec:
+  clusterQueue: phase7-failure-cq

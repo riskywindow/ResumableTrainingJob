@@ -1,0 +1,35 @@
+# Phase 7 ClusterQueue with ProvisioningRequest AdmissionCheck.
+#
+# This queue requires the dev-provisioning AdmissionCheck to be satisfied
+# before workloads are fully admitted. Kueue's built-in provisioning AC
+# controller creates ProvisioningRequest objects; the fake backend processes
+# them deterministically.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: phase7-cq
+  labels:
+    checkpoint-native.dev/profile: phase7-provisioning
+spec:
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+      flavors:
+        - name: default-flavor
+          resources:
+            - name: cpu
+              nominalQuota: 500m
+            - name: memory
+              nominalQuota: 512Mi
+  admissionChecksStrategy:
+    admissionChecks:
+      - name: dev-provisioning
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Never
+    borrowWithinCohort:
+      maxPriorityThreshold: 0

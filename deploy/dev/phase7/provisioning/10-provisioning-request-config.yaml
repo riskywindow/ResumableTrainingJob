@@ -1,0 +1,46 @@
+# ProvisioningRequestConfig for the Phase 7 dev profile.
+#
+# This tells Kueue's built-in ProvisioningRequest AC controller which
+# provisioningClassName to put on ProvisioningRequest objects it creates.
+# The fake backend matches on this className to determine behavior.
+#
+# Available classes for Phase 7 dev:
+#   check-capacity.fake.dev  — delayed success (tunable via fake.dev/delay)
+#   failed.fake.dev          — permanent failure
+#   booking-expiry.fake.dev  — success then revoke (tunable via fake.dev/expiry)
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ProvisioningRequestConfig
+metadata:
+  name: dev-provisioning-config
+  labels:
+    checkpoint-native.dev/profile: phase7-provisioning
+spec:
+  provisioningClassName: check-capacity.fake.dev
+  parameters:
+    fake.dev/delay: "10s"
+---
+# A second config for failure testing.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ProvisioningRequestConfig
+metadata:
+  name: dev-provisioning-failure-config
+  labels:
+    checkpoint-native.dev/profile: phase7-provisioning
+spec:
+  provisioningClassName: failed.fake.dev
+  parameters:
+    fake.dev/failure-message: "Fake backend: GPU pool exhausted in dev cluster"
+---
+# A third config for booking-expiry testing.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ProvisioningRequestConfig
+metadata:
+  name: dev-provisioning-expiry-config
+  labels:
+    checkpoint-native.dev/profile: phase7-provisioning
+spec:
+  provisioningClassName: booking-expiry.fake.dev
+  parameters:
+    fake.dev/delay: "5s"
+    fake.dev/expiry: "30s"

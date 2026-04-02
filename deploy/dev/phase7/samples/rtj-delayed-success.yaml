@@ -1,0 +1,86 @@
+# Sample RTJ for Phase 7: successful delayed provisioning.
+#
+# This RTJ targets the phase7-training LocalQueue which uses the phase7-cq
+# ClusterQueue. That queue requires the dev-provisioning AdmissionCheck
+# backed by the check-capacity.fake.dev class (delayed success, default 10s).
+#
+# Expected flow:
+#   1. RTJ submitted → Kueue creates Workload
+#   2. Kueue reserves quota → creates ProvisioningRequest
+#   3. Fake backend waits 10s → sets Provisioned=True
+#   4. Kueue sees PR provisioned → sets AdmissionCheck Ready
+#   5. RTJ controller sees all checks ready → launches child JobSet
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase7-training
+spec:
+  suspend: true
+  queueName: phase7-training
+  control:
+    desiredState: Running
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: cpu-only
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: AWS_ACCESS_KEY_ID
+                            value: minioadmin
+                          - name: AWS_SECRET_ACCESS_KEY
+                            value: minioadmin123
+                          - name: AWS_ENDPOINT_URL
+                            value: http://minio.checkpoint-dev.svc.cluster.local:9000
+                          - name: AWS_DEFAULT_REGION
+                            value: us-east-1
+                          - name: SLEEP_PER_STEP
+                            value: "5"
+                          - name: CHECKPOINT_EVERY
+                            value: "3"
+                          - name: TOTAL_STEPS
+                            value: "100"
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

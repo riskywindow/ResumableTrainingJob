@@ -1,0 +1,74 @@
+# Sample RTJ for Phase 7: startup timeout / waitForPodsReady path.
+#
+# This RTJ uses the standard phase7-training queue (delayed-success provisioning)
+# but references an image that does not exist, causing pods to enter ImagePullBackOff.
+# This exercises the Kueue waitForPodsReady timeout → eviction → requeuing path.
+#
+# Expected flow:
+#   1. RTJ submitted → Kueue creates Workload
+#   2. Kueue reserves quota → creates ProvisioningRequest
+#   3. Fake backend sets Provisioned=True after 10s
+#   4. Kueue admits Workload → RTJ controller launches child JobSet
+#   5. Pods fail to start (ImagePullBackOff)
+#   6. Kueue waitForPodsReady timeout (120s) fires → evicts Workload
+#   7. Kueue requeues with backoff
+#   8. RTJ controller detects eviction and updates startupRecovery status
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase7-training
+spec:
+  suspend: true
+  queueName: phase7-training
+  control:
+    desiredState: Running
+  identity:
+    worldSize: 2
+    image: nonexistent-image:v999.999.999
+    codeVersion: "1"
+    gpuShape: cpu-only
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        # Deliberately nonexistent image to trigger startup failure.
+                        image: nonexistent-image:v999.999.999
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

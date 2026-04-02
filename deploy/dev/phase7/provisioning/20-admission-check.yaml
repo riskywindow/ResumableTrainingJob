@@ -1,0 +1,49 @@
+# AdmissionChecks for Phase 7 ProvisioningRequest integration.
+#
+# These use Kueue's built-in ProvisioningRequest AC controller
+# (controllerName: kueue.x-k8s.io/provisioning). Kueue creates
+# ProvisioningRequest objects based on the referenced config; the
+# fake backend updates their conditions; Kueue maps conditions back
+# to AdmissionCheck state on the Workload.
+---
+# Default: delayed-success provisioning check.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: AdmissionCheck
+metadata:
+  name: dev-provisioning
+  labels:
+    checkpoint-native.dev/profile: phase7-provisioning
+spec:
+  controllerName: kueue.x-k8s.io/provisioning
+  parameters:
+    apiGroup: kueue.x-k8s.io
+    kind: ProvisioningRequestConfig
+    name: dev-provisioning-config
+---
+# Failure path: provisioning that always fails.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: AdmissionCheck
+metadata:
+  name: dev-provisioning-failure
+  labels:
+    checkpoint-native.dev/profile: phase7-provisioning
+spec:
+  controllerName: kueue.x-k8s.io/provisioning
+  parameters:
+    apiGroup: kueue.x-k8s.io
+    kind: ProvisioningRequestConfig
+    name: dev-provisioning-failure-config
+---
+# Expiry path: provisioning that succeeds then revokes.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: AdmissionCheck
+metadata:
+  name: dev-provisioning-expiry
+  labels:
+    checkpoint-native.dev/profile: phase7-provisioning
+spec:
+  controllerName: kueue.x-k8s.io/provisioning
+  parameters:
+    apiGroup: kueue.x-k8s.io
+    kind: ProvisioningRequestConfig
+    name: dev-provisioning-expiry-config
