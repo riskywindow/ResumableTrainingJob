@@ -1,0 +1,95 @@
+# Phase 8 sample: Successful DRA-backed RTJ launch.
+#
+# This RTJ requests 2 simulated GPUs per worker via the "example-gpu"
+# DeviceClass. The operator creates a companion ResourceClaimTemplate
+# named "<rtj-name>-gpu" and injects it into the child JobSet.
+#
+# Expected flow:
+#   1. RTJ submitted → operator creates ResourceClaimTemplate
+#   2. Kueue creates Workload → deviceClassMappings resolves example.dev/gpu
+#   3. Kueue admits Workload with GPU quota
+#   4. Operator creates child JobSet with DRA claim references
+#   5. Kubelet allocates simulated devices from ResourceSlice
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase8-training
+spec:
+  suspend: true
+  queueName: phase8-training
+  control:
+    desiredState: Running
+  devices:
+    mode: DRA
+    claims:
+      - name: gpu
+        containers:
+          - trainer
+        request:
+          deviceClassName: example-gpu
+          count: 2
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: example-gpu-v1
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: AWS_ACCESS_KEY_ID
+                            value: minioadmin
+                          - name: AWS_SECRET_ACCESS_KEY
+                            value: minioadmin123
+                          - name: AWS_ENDPOINT_URL
+                            value: http://minio.checkpoint-dev.svc.cluster.local:9000
+                          - name: AWS_DEFAULT_REGION
+                            value: us-east-1
+                          - name: SLEEP_PER_STEP
+                            value: "5"
+                          - name: CHECKPOINT_EVERY
+                            value: "3"
+                          - name: TOTAL_STEPS
+                            value: "100"
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

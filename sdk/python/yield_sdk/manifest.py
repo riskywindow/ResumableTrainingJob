@@ -89,6 +89,11 @@ class CheckpointManifest:
     checkpoint_format_version: str | None = None
     cross_size_restore_supported: bool | None = None
 
+    # Phase 8: device profile fingerprint from DRA device spec.
+    # SHA256 hash of the canonical sorted device class + selector entries.
+    # Empty/None when DRA is not configured (Phase 7 backward compatibility).
+    device_profile_fingerprint: str | None = None
+
     def validate(self) -> None:
         _require_non_empty(self.checkpoint_id, "checkpointID")
         _require_non_empty(self.cluster_identity, "clusterIdentity")
@@ -154,6 +159,8 @@ class CheckpointManifest:
             payload["checkpointFormatVersion"] = self.checkpoint_format_version
         if self.cross_size_restore_supported is not None:
             payload["crossSizeRestoreSupported"] = self.cross_size_restore_supported
+        if self.device_profile_fingerprint is not None:
+            payload["deviceProfileFingerprint"] = self.device_profile_fingerprint
         return payload
 
     def to_json(self) -> str:
@@ -188,6 +195,7 @@ class CheckpointManifest:
             worker_count=payload.get("workerCount"),
             checkpoint_format_version=payload.get("checkpointFormatVersion"),
             cross_size_restore_supported=payload.get("crossSizeRestoreSupported"),
+            device_profile_fingerprint=payload.get("deviceProfileFingerprint"),
         )
         manifest.validate()
         return manifest

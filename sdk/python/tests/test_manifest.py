@@ -153,5 +153,72 @@ class Phase3ManifestFieldsTests(unittest.TestCase):
             self.assertIn(key, payload, f"missing key: {key}")
 
 
+class Phase8DeviceProfileTests(unittest.TestCase):
+    def test_device_profile_fingerprint_round_trip(self) -> None:
+        manifest = _base_manifest(
+            device_profile_fingerprint="abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+        )
+        encoded = manifest.to_json()
+        decoded = CheckpointManifest.from_json(encoded)
+        self.assertEqual(
+            decoded.device_profile_fingerprint,
+            "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+        )
+
+    def test_device_profile_fingerprint_in_serialized_json(self) -> None:
+        manifest = _base_manifest(
+            device_profile_fingerprint="fp123",
+        )
+        payload = manifest.to_dict()
+        self.assertEqual(payload["deviceProfileFingerprint"], "fp123")
+
+    def test_device_profile_fingerprint_omitted_when_none(self) -> None:
+        manifest = _base_manifest()
+        payload = manifest.to_dict()
+        self.assertNotIn("deviceProfileFingerprint", payload)
+
+    def test_phase7_manifest_without_device_profile_decodes(self) -> None:
+        """A Phase 7 manifest with no device profile field decodes with None default."""
+        manifest = _base_manifest()
+        payload = manifest.to_dict()
+        # Simulate Phase 7: ensure no device profile key.
+        payload.pop("deviceProfileFingerprint", None)
+        raw = json.dumps(payload, indent=2, sort_keys=True)
+
+        decoded = CheckpointManifest.from_json(raw)
+        self.assertIsNone(decoded.device_profile_fingerprint)
+
+    def test_device_profile_with_phase3_fields_coexist(self) -> None:
+        """Phase 8 device profile and Phase 3 fields can coexist."""
+        manifest = _base_manifest(
+            leader_count=0,
+            worker_count=4,
+            checkpoint_format_version=CHECKPOINT_FORMAT_DCP_V1,
+            cross_size_restore_supported=True,
+            device_profile_fingerprint="sha256-device-fp",
+        )
+        payload = manifest.to_dict()
+        self.assertIn("crossSizeRestoreSupported", payload)
+        self.assertIn("deviceProfileFingerprint", payload)
+        self.assertEqual(payload["deviceProfileFingerprint"], "sha256-device-fp")
+        self.assertTrue(payload["crossSizeRestoreSupported"])
+
+    def test_manifest_completeness_with_all_phase8_fields(self) -> None:
+        """Manifest with all Phase 3 + Phase 8 fields validates successfully."""
+        manifest = _base_manifest(
+            leader_count=0,
+            worker_count=8,
+            checkpoint_format_version=CHECKPOINT_FORMAT_DCP_V1,
+            cross_size_restore_supported=True,
+            device_profile_fingerprint="full-fingerprint-value",
+        )
+        manifest.validate()
+        payload = manifest.to_dict()
+
+        phase8_keys = {"deviceProfileFingerprint"}
+        for key in phase8_keys:
+            self.assertIn(key, payload, f"missing key: {key}")
+
+
 if __name__ == "__main__":
     unittest.main()

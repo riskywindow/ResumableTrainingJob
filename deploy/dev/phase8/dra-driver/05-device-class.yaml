@@ -1,0 +1,15 @@
+# Phase 8: DeviceClass for simulated example GPUs.
+#
+# This DeviceClass is referenced by RTJ spec.devices.claims[].request.deviceClassName
+# and by Kueue deviceClassMappings. It matches all devices published by the
+# example DRA driver (driverName = dra.example.dev).
+apiVersion: resource.k8s.io/v1beta1
+kind: DeviceClass
+metadata:
+  name: example-gpu
+  labels:
+    checkpoint-native.dev/profile: phase8-dra
+spec:
+  selectors:
+    - cel:
+        expression: "device.driver == 'dra.example.dev'"

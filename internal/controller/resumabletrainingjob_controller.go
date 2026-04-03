@@ -62,6 +62,7 @@ type ResumableTrainingJobReconciler struct {
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloadpriorityclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=training.checkpoint.example.io,resources=checkpointprioritypolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaimtemplates,verbs=get;list;watch;create;delete
 
 func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("resumableTrainingJob", req.NamespacedName)
@@ -118,6 +119,20 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 	//     the same Reconcile path below.
 	if ShouldSuppressRuntime(r.Mode, &job) {
 		return r.reconcileManagerIntent(ctx, &job)
+	}
+
+	// Phase 8: reconcile DRA ResourceClaimTemplate companions. This runs
+	// early (before launch gates) to ensure templates exist before Kueue
+	// evaluates the Workload for admission. When DRA is not configured,
+	// this is a no-op that returns TemplatesReady=true.
+	draResult, err := r.reconcileDRATemplates(ctx, &job, r.now())
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconcile DRA templates: %w", err)
+	}
+	if draResult.StatusChanged {
+		if err := r.Status().Update(ctx, &job); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	activeJobSet, activeExists, err := r.getActiveJobSet(ctx, &job)
@@ -184,6 +199,14 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 			return ctrl.Result{RequeueAfter: priorityRequeue}, nil
 		}
 		return ctrl.Result{}, nil
+	}
+
+	// Phase 8: gate launch on DRA template readiness. If templates were
+	// just created or are in a transient race state, defer launch until
+	// the next reconcile.
+	if !draResult.TemplatesReady {
+		logger.Info("DRA templates not ready, deferring launch")
+		return ctrl.Result{RequeueAfter: launchGateRequeueInterval}, nil
 	}
 
 	// Phase 4/7: evaluate pre-launch gates (readiness check, topology, provisioning).

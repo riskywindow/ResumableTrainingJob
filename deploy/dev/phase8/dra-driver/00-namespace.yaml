@@ -1,0 +1,7 @@
+# Phase 8: Namespace for the example DRA driver.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dra-example-driver
+  labels:
+    checkpoint-native.dev/profile: phase8-dra

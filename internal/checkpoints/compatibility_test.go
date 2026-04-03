@@ -183,6 +183,106 @@ func TestCheckManifestCompatibilityPreservesStrictDimensionChecks(t *testing.T) 
 	}
 }
 
+// --- Phase 8: device profile compatibility tests ---
+
+func TestCheckManifestCompatibilitySameDeviceProfile(t *testing.T) {
+	manifest := testManifest("s3://bucket/demo/manifests/ckpt.manifest.json", "ckpt", 1, 10)
+	manifest.DeviceProfileFingerprint = "abc123def456"
+
+	request := baseRequest()
+	request.CurrentDeviceProfileFingerprint = "abc123def456"
+
+	compatible, reason := CheckManifestCompatibility(manifest, request)
+	if !compatible {
+		t.Fatalf("expected same device profile to be compatible, got reason %q", reason)
+	}
+	if !strings.Contains(reason, "device profile") {
+		t.Fatalf("expected reason to mention device profile, got %q", reason)
+	}
+}
+
+func TestCheckManifestCompatibilityDifferentDeviceProfileRejected(t *testing.T) {
+	manifest := testManifest("s3://bucket/demo/manifests/ckpt.manifest.json", "ckpt", 1, 10)
+	manifest.DeviceProfileFingerprint = "abc123def456"
+
+	request := baseRequest()
+	request.CurrentDeviceProfileFingerprint = "different789xyz"
+
+	compatible, reason := CheckManifestCompatibility(manifest, request)
+	if compatible {
+		t.Fatal("expected different device profile to be incompatible")
+	}
+	if !strings.Contains(reason, "device profile fingerprint mismatch") {
+		t.Fatalf("expected 'device profile fingerprint mismatch', got %q", reason)
+	}
+}
+
+func TestCheckManifestCompatibilityCheckpointWithoutProfileRequestWithProfile(t *testing.T) {
+	// Checkpoint saved without DRA (Phase 7), request has DRA enabled.
+	// Should be rejected (fail-closed).
+	manifest := testManifest("s3://bucket/demo/manifests/ckpt.manifest.json", "ckpt", 1, 10)
+	// DeviceProfileFingerprint is empty (Phase 7 manifest)
+
+	request := baseRequest()
+	request.CurrentDeviceProfileFingerprint = "abc123def456"
+
+	compatible, reason := CheckManifestCompatibility(manifest, request)
+	if compatible {
+		t.Fatal("expected checkpoint without device profile to be rejected when request has DRA")
+	}
+	if !strings.Contains(reason, "saved without device profile") {
+		t.Fatalf("expected 'saved without device profile' message, got %q", reason)
+	}
+}
+
+func TestCheckManifestCompatibilityCheckpointWithProfileRequestWithout(t *testing.T) {
+	// Checkpoint saved with DRA, request has no DRA (downgrade case).
+	// Should be compatible (backward-compatible: request without DRA
+	// does not enforce device profile check).
+	manifest := testManifest("s3://bucket/demo/manifests/ckpt.manifest.json", "ckpt", 1, 10)
+	manifest.DeviceProfileFingerprint = "abc123def456"
+
+	request := baseRequest()
+	// CurrentDeviceProfileFingerprint is empty (no DRA)
+
+	compatible, reason := CheckManifestCompatibility(manifest, request)
+	if !compatible {
+		t.Fatalf("expected checkpoint with device profile to be compatible when request has no DRA, got reason %q", reason)
+	}
+}
+
+func TestCheckManifestCompatibilityBothWithoutDeviceProfile(t *testing.T) {
+	// Neither has device profile (Phase 7 behavior preserved).
+	manifest := testManifest("s3://bucket/demo/manifests/ckpt.manifest.json", "ckpt", 1, 10)
+
+	request := baseRequest()
+
+	compatible, reason := CheckManifestCompatibility(manifest, request)
+	if !compatible {
+		t.Fatalf("expected Phase 7 manifest without device profiles to be compatible, got reason %q", reason)
+	}
+}
+
+func TestCheckManifestCompatibilityDeviceProfileWithWorldSizeChange(t *testing.T) {
+	// Same device profile with world size change should be compatible.
+	manifest := testManifest("s3://bucket/demo/manifests/ckpt.manifest.json", "ckpt", 1, 10)
+	manifest.DeviceProfileFingerprint = "abc123def456"
+	manifest.CrossSizeRestoreSupported = ptr.To(true)
+
+	request := baseRequest()
+	request.WorldSize = 4
+	request.AllowWorldSizeChange = true
+	request.CurrentDeviceProfileFingerprint = "abc123def456"
+
+	compatible, reason := CheckManifestCompatibility(manifest, request)
+	if !compatible {
+		t.Fatalf("expected same device profile with world-size change to be compatible, got reason %q", reason)
+	}
+	if !strings.Contains(reason, "world-size change") {
+		t.Fatalf("expected reason to mention world-size change, got %q", reason)
+	}
+}
+
 func baseRequest() ResumeRequest {
 	return ResumeRequest{
 		StorageRootURI:          "s3://bucket/demo/",

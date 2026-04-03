@@ -1,0 +1,123 @@
+# Phase 8: Example DRA driver DaemonSet.
+#
+# This DaemonSet runs on every worker node and publishes ResourceSlice
+# objects advertising simulated GPU devices. Each node publishes 4
+# simulated devices via the dra.example.dev driver.
+#
+# The driver is a simple shell script that:
+#   1. Reads the node name from the downward API.
+#   2. Creates a ResourceSlice with 4 simulated devices per node.
+#   3. Renews the ResourceSlice periodically (keep-alive).
+#   4. Cleans up the ResourceSlice on termination.
+#
+# This does NOT require real accelerators -- all devices are virtual.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dra-example-driver
+  namespace: dra-example-driver
+  labels:
+    checkpoint-native.dev/profile: phase8-dra
+    app.kubernetes.io/name: dra-example-driver
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dra-example-driver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dra-example-driver
+        checkpoint-native.dev/profile: phase8-dra
+    spec:
+      serviceAccountName: dra-example-driver
+      terminationGracePeriodSeconds: 10
+      # Only run on worker nodes (skip control-plane in kind).
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+          operator: Exists
+      containers:
+        - name: driver
+          image: bitnami/kubectl:1.33
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+
+              NODE_NAME="${NODE_NAME:?NODE_NAME is required}"
+              DRIVER_NAME="dra.example.dev"
+              DEVICES_PER_NODE="${DEVICES_PER_NODE:-4}"
+              SLICE_NAME="dra-example-${NODE_NAME}"
+              RENEW_INTERVAL="${RENEW_INTERVAL:-30}"
+
+              # Build the devices array for the ResourceSlice.
+              build_devices() {
+                local devices="["
+                for i in $(seq 0 $((DEVICES_PER_NODE - 1))); do
+                  if [ "$i" -gt 0 ]; then devices="${devices},"; fi
+                  devices="${devices}{\"name\":\"gpu-${i}\",\"basic\":{\"attributes\":{\"model\":{\"string\":\"Example-GPU-v1\"},\"memory\":{\"quantity\":\"80Gi\"},\"index\":{\"int\":${i}}}}}"
+                done
+                devices="${devices}]"
+                echo "$devices"
+              }
+
+              apply_slice() {
+                local devices
+                devices="$(build_devices)"
+                cat <<SLICE_EOF | kubectl apply --server-side -f - 2>&1
+              apiVersion: resource.k8s.io/v1beta1
+              kind: ResourceSlice
+              metadata:
+                name: ${SLICE_NAME}
+                labels:
+                  checkpoint-native.dev/profile: phase8-dra
+                  app.kubernetes.io/managed-by: dra-example-driver
+              spec:
+                driver: ${DRIVER_NAME}
+                pool:
+                  name: ${NODE_NAME}
+                  generation: 1
+                  resourceSliceCount: 1
+                nodeName: ${NODE_NAME}
+                devices: ${devices}
+              SLICE_EOF
+              }
+
+              cleanup() {
+                echo "cleaning up ResourceSlice ${SLICE_NAME}..."
+                kubectl delete resourceslice "${SLICE_NAME}" --ignore-not-found=true 2>/dev/null || true
+                exit 0
+              }
+
+              trap cleanup SIGTERM SIGINT
+
+              echo "dra-example-driver starting on node ${NODE_NAME}"
+              echo "publishing ${DEVICES_PER_NODE} simulated devices..."
+
+              # Initial publish.
+              apply_slice
+              echo "ResourceSlice ${SLICE_NAME} published"
+
+              # Keep-alive loop.
+              while true; do
+                sleep "${RENEW_INTERVAL}" &
+                wait $! || true
+                apply_slice >/dev/null 2>&1 || echo "WARNING: failed to renew ResourceSlice"
+              done
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: DEVICES_PER_NODE
+              value: "4"
+            - name: RENEW_INTERVAL
+              value: "30"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi

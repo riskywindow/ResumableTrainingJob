@@ -973,6 +973,38 @@ func clearStartupRecoveryTimeoutConditions(job *trainingv1alpha1.ResumableTraini
 
 // --- Phase 8: Device status helpers ---
 
+// syncDeviceResumeFingerprint records the device profile fingerprint
+// that was active when a resume was performed. Returns true when changed.
+func syncDeviceResumeFingerprint(
+	job *trainingv1alpha1.ResumableTrainingJob,
+) bool {
+	if job.Status.Devices == nil {
+		return false
+	}
+	fp := job.Status.Devices.CurrentDeviceProfileFingerprint
+	if job.Status.Devices.LastResumeDeviceProfileFingerprint != fp {
+		job.Status.Devices.LastResumeDeviceProfileFingerprint = fp
+		return true
+	}
+	return false
+}
+
+// syncDeviceCheckpointFingerprint records the device profile fingerprint
+// from the most recently completed checkpoint manifest. Returns true when changed.
+func syncDeviceCheckpointFingerprint(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	manifestFingerprint string,
+) bool {
+	if job.Status.Devices == nil {
+		return false
+	}
+	if job.Status.Devices.LastCheckpointDeviceProfileFingerprint != manifestFingerprint {
+		job.Status.Devices.LastCheckpointDeviceProfileFingerprint = manifestFingerprint
+		return true
+	}
+	return false
+}
+
 // syncDeviceStatus updates status.devices with the current device profile
 // fingerprint and template references. Returns true when any field changed.
 func syncDeviceStatus(

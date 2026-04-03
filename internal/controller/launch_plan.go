@@ -148,6 +148,9 @@ func (plan *LaunchPlan) toRenderInput(
 		}
 	}
 
+	// Phase 8: populate DRA claim injections from RTJ spec + status.
+	input.DRAClaims = rtjjobset.BuildDRAClaimInjections(job)
+
 	return input
 }
 

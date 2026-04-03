@@ -1,0 +1,8 @@
+# Phase 8: ResourceFlavor for DRA-aware queue.
+# Reuses the default flavor but labeled for Phase 8.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: phase8-flavor
+  labels:
+    checkpoint-native.dev/profile: phase8-dra

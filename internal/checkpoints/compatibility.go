@@ -25,6 +25,11 @@ type ResumeRequest struct {
 	// All other compatibility dimensions remain strict.
 	// Phase 3 addition; default false preserves Phase 2 behavior.
 	AllowWorldSizeChange bool
+
+	// CurrentDeviceProfileFingerprint is the SHA256 fingerprint of the
+	// current DRA device profile. Empty when DRA is not configured.
+	// Phase 8 addition; empty preserves Phase 7 behavior.
+	CurrentDeviceProfileFingerprint string
 }
 
 func CheckManifestCompatibility(manifest CheckpointManifest, request ResumeRequest) (bool, string) {
@@ -71,8 +76,33 @@ func CheckManifestCompatibility(manifest CheckpointManifest, request ResumeReque
 		return false, "sharding mode mismatch"
 	}
 
+	// Phase 8: device profile fingerprint check (fail-closed).
+	// When the current request has a device profile fingerprint, the
+	// checkpoint must have been saved with the same device profile.
+	// When neither has a fingerprint (Phase 7 or earlier), the check
+	// is skipped (backward compatible).
+	// When only one side has a fingerprint:
+	//   - Checkpoint has fingerprint, request doesn't: compatible
+	//     (the user has downgraded from DRA to non-DRA, checkpoint
+	//     is still usable).
+	//   - Checkpoint lacks fingerprint, request has one: incompatible
+	//     (the checkpoint was saved without DRA; resuming under a
+	//     specific device profile is not safe).
+	if request.CurrentDeviceProfileFingerprint != "" {
+		if manifest.DeviceProfileFingerprint == "" {
+			return false, "checkpoint was saved without device profile; cannot resume under DRA device profile (fail-closed)"
+		}
+		if manifest.DeviceProfileFingerprint != request.CurrentDeviceProfileFingerprint {
+			return false, "device profile fingerprint mismatch (fail-closed)"
+		}
+	}
+
 	if manifest.WorldSize == request.WorldSize {
-		return true, "exact match on lineage, mode, cluster, shape, image, code version, world size, optimizer mode, sharding mode, and manifest format"
+		matchMsg := "exact match on lineage, mode, cluster, shape, image, code version, world size, optimizer mode, sharding mode, and manifest format"
+		if request.CurrentDeviceProfileFingerprint != "" {
+			matchMsg += ", device profile"
+		}
+		return true, matchMsg
 	}
 	return true, fmt.Sprintf("compatible with world-size change (%d -> %d); all other dimensions match", manifest.WorldSize, request.WorldSize)
 }

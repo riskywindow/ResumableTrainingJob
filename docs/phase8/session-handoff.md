@@ -389,41 +389,419 @@ All tests pass (17 packages, 0 failures):
 - `TestDeviceStatusEqual` (6 subtests)
 - `TestSyncDeviceStatus_PreservesAllocationFields`
 
+### Recommended next prompt (superseded by Session 4)
+
+See Session 4 below.
+
+---
+
+## Session 4: DRA-aware Workload synthesis and child JobSet rendering
+
+**Date**: 2026-04-01
+
+### Mission
+
+Integrate DRA into Kueue Workload PodSet synthesis and child JobSet
+rendering. Wire `reconcileDRATemplates()` into the main reconcile loop.
+Add RBAC markers for ResourceClaimTemplate CRUD. Ensure backward
+compatibility when DRA is not configured.
+
+### Decisions made
+
+1. **DRA claims injected into PodSet pod templates for Kueue accounting.**
+   `PodSetsFromRTJTemplate()` now adds `PodResourceClaim` entries with
+   `ResourceClaimTemplateName` and container `Resources.Claims` entries
+   to PodSet templates. Template names use the deterministic
+   `<rtj-name>-<claim-name>` format from `dra.TemplateNameForClaim()`.
+
+2. **Container-scoped DRA injection.** Claims are only injected into
+   PodSets/replicatedJobs where at least one container matches the
+   claim's `containers[]` list. This prevents over-allocation (e.g.,
+   driver pods that don't need GPUs won't request them).
+
+3. **DRA injection is the last step in the render pipeline.** Applied
+   after topology constraints and podSetUpdates to ensure clean
+   composition. Order: Kueue metadata stripping → admitted counts →
+   env vars → volumes → topology → podSetUpdates → DRA claims.
+
+4. **`reconcileDRATemplates()` runs early, before launch gates.**
+   Placed after manager-mode check and before `getActiveJobSet()`.
+   This ensures templates exist before Kueue evaluates the Workload
+   for admission. When DRA is not configured, it's a no-op.
+
+5. **Launch gated on DRA template readiness.** The controller will
+   not create a child JobSet until `TemplatesReady` is true. This is
+   a safety gate for the rare transient race condition where template
+   creation is in progress.
+
+6. **Child JobSet rendering uses status refs, PodSet synthesis uses
+   computed names.** The rendering path reads template names from
+   `status.devices.resourceClaimTemplateRefs` (populated by
+   `reconcileDRATemplates()`). PodSet synthesis computes names
+   deterministically from `dra.TemplateNameForClaim()` since status
+   may not be populated when Kueue's webhook calls `PodSets()`.
+
+7. **RBAC: `get;list;watch;create;delete` for ResourceClaimTemplates.**
+   No `update` or `patch` -- the operator recreates on spec drift.
+
+8. **OQ2 partially resolved: Kueue deviceClassMappings integration.**
+   The synthesized PodSets now include DRA pod spec fields that Kueue
+   can resolve via `deviceClassMappings`. Full e2e verification of
+   Kueue accounting is deferred to the e2e session, but the data path
+   is now complete.
+
+### Open questions resolved
+
+| OQ | Resolution |
+|---|---|
+| OQ2 | Partially resolved -- PodSet synthesis includes DRA fields for deviceClassMappings; e2e verification deferred |
+
+### Open questions remaining
+
+| OQ | Status |
+|---|---|
+| OQ4 | Unresolved -- Example DRA driver testing deferred to e2e session |
+| OQ8 | Deferred -- multi-device-class supported at API level; single-class-per-claim is Phase 8 scope |
+| OQ9 | Unresolved -- DRA + ProvisioningRequest interaction test deferred to e2e |
+
+### Files changed
+
+| File | Action |
+|---|---|
+| internal/jobset/dra_render.go | Created: DRAClaimInjection, InjectDRAClaims(), BuildDRAClaimInjections(), container matching helpers |
+| internal/jobset/dra_render_test.go | Created: 13 tests for DRA injection (single/multi claim, targeting, idempotency, build logic) |
+| internal/jobset/render.go | Updated: added DRAClaims field to RenderInput, call InjectDRAClaims() after podSetUpdates |
+| internal/jobset/render_test.go | Updated: added 4 Phase 8 DRA render integration tests |
+| internal/kueue/rtj_podsets.go | Updated: added injectDRAIntoPodSets(), container matching helpers; called from PodSetsFromRTJTemplate() |
+| internal/kueue/rtj_podsets_test.go | Updated: added 8 Phase 8 DRA PodSet tests |
+| internal/controller/resumabletrainingjob_controller.go | Updated: added RBAC marker for ResourceClaimTemplate; wired reconcileDRATemplates() into Reconcile(); added DRA template readiness gate |
+| internal/controller/resume_flow.go | Updated: populated DRAClaims in simple launch path |
+| internal/controller/launch_plan.go | Updated: populated DRAClaims in plan-based launch path |
+| docs/phase8/dra-rendering-and-kueue-accounting.md | Created: full documentation of DRA rendering and accounting integration |
+| docs/phase8/session-handoff.md | Updated: Session 4 results |
+
+### Tests run
+
+All tests pass (13 packages, 0 failures, 0 regressions):
+
+**New tests (25 total):**
+
+`internal/jobset/dra_render_test.go` (13 tests):
+- `TestInjectDRAClaims_SingleClaim`
+- `TestInjectDRAClaims_MultipleClaims`
+- `TestInjectDRAClaims_TargetedContainers`
+- `TestInjectDRAClaims_NoMatchingContainers`
+- `TestInjectDRAClaims_EmptyClaimsIsNoOp`
+- `TestInjectDRAClaims_Idempotent`
+- `TestInjectDRAClaims_MultipleReplicatedJobs`
+- `TestInjectDRAClaims_AllContainersWhenTargetsEmpty`
+- `TestBuildDRAClaimInjections_Disabled`
+- `TestBuildDRAClaimInjections_NoStatus`
+- `TestBuildDRAClaimInjections_Builds`
+- `TestBuildDRAClaimInjections_SkipsMissingRef`
+- `TestBuildDRAClaimInjections_DisabledMode`
+
+`internal/jobset/render_test.go` (4 new tests):
+- `TestRenderChildJobSetInjectsDRAClaims`
+- `TestRenderChildJobSetNoDRAWhenEmpty`
+- `TestRenderChildJobSetNoKueueManagementOnChildWithDRA`
+- `TestRenderChildJobSetDRAWithTopologyCoexist`
+
+`internal/kueue/rtj_podsets_test.go` (8 new tests):
+- `TestPodSetsFromRTJTemplateInjectsDRAClaims`
+- `TestPodSetsFromRTJTemplateNoDRAWhenDisabled`
+- `TestPodSetsFromRTJTemplateNoDRAWhenNilDevices`
+- `TestPodSetsFromRTJTemplateDRATargetsCorrectContainers`
+- `TestPodSetsFromRTJTemplateDRASkipsNonMatchingContainers`
+- `TestPodSetsFromRTJTemplateDRATemplateNameFormat`
+- `TestPodSetsFromRTJTemplateDRAMultipleClaims`
+- `TestPodSetsFromRTJTemplateDRAPreservesExistingPodSetBehavior`
+
+### Recommended next prompt
+
+See Session 5 below.
+
+---
+
+## Session 5: DRA status observation and checkpoint device compatibility
+
+**Date**: 2026-04-02
+
+### Mission
+
+Implement DRA claim-allocation observation and device-profile-aware
+checkpoint compatibility. Surface useful RTJ status for DRA claim
+lifecycle and enforce conservative fail-closed checkpoint compatibility
+when DRA device profiles are active.
+
+### Decisions made
+
+1. **Claim allocation observation uses per-device conditions.** The DRA
+   v1beta1 `ResourceClaimStatus` does not have a top-level `Conditions`
+   field. Failure detection uses `AllocatedDeviceStatus.Conditions`
+   (per-device conditions reported by DRA drivers). A `Ready=False`
+   condition or failure-indicating reasons (`AllocationFailed`,
+   `DriverError`, `Unschedulable`, `UnsatisfiedConstraints`) are
+   treated as failures.
+
+2. **Claim filtering uses RTJ labels and template annotations.** Claims
+   are matched to RTJs by the `training.checkpoint.example.io/rtj-name`
+   label (inherited from ResourceClaimTemplate) or by the
+   `resource.kubernetes.io/claim-template-name` annotation.
+
+3. **Checkpoint device profile is fail-closed.** When the current RTJ
+   has a DRA device profile, checkpoints without a device profile are
+   rejected. When both have profiles, they must match exactly. When
+   neither has a profile, the check is skipped (Phase 7 preserved).
+
+4. **Downgrade (DRA to non-DRA) is compatible.** A checkpoint saved
+   with a device profile can be used when the current RTJ has no DRA
+   configured. The rationale is that the checkpoint data is valid
+   regardless of whether the current runtime uses DRA.
+
+5. **Device profile fingerprint stored in manifest JSON.** The
+   `deviceProfileFingerprint` field is optional with `omitempty` in
+   Go and `None` default in Python. Phase 7 manifests decode without
+   error.
+
+6. **DRAClaimAllocationFailed condition.** A condition is set on the
+   RTJ when claim allocation fails, and cleared when all claims are
+   allocated. This provides clear status visibility.
+
+7. **Resume request carries device fingerprint.** Both the controller's
+   `resumeCheckpointForAttempt()` and `ResumeRequestFromRTJ()` populate
+   `CurrentDeviceProfileFingerprint` from `status.devices`.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| internal/dra/claims.go | Created: ClaimAllocationSummary, SummarizeClaimAllocations(), FilterClaimsForRTJ(), device-level failure detection |
+| internal/dra/claims_test.go | Created: 19 tests for claim summarization, filtering, failure detection |
+| internal/controller/dra_status.go | Created: observeDRAClaimStatus(), syncClaimAllocationFields(), syncDRAClaimConditions(), DRAClaimStatusResult |
+| internal/controller/dra_status_test.go | Created: 13 tests for DRA status observation and condition management |
+| internal/controller/status_helpers.go | Updated: added syncDeviceResumeFingerprint(), syncDeviceCheckpointFingerprint() |
+| internal/checkpoints/types.go | Updated: added DeviceProfileFingerprint field to CheckpointManifest |
+| internal/checkpoints/compatibility.go | Updated: added CurrentDeviceProfileFingerprint to ResumeRequest; added device profile compatibility check (fail-closed) |
+| internal/checkpoints/compatibility_test.go | Updated: added 6 device profile compatibility tests |
+| internal/checkpoints/selector.go | Updated: ResumeRequestFromRTJ() now includes device profile fingerprint from RTJ status |
+| internal/checkpoints/selector_test.go | Updated: added 3 device profile selector tests |
+| internal/controller/resume_flow.go | Updated: resumeCheckpointForAttempt() now includes device profile fingerprint in ResumeRequest |
+| sdk/python/yield_sdk/manifest.py | Updated: added device_profile_fingerprint field with optional serialization |
+| sdk/python/tests/test_manifest.py | Updated: added 6 Phase 8 device profile tests |
+| docs/phase8/checkpoint-device-compatibility.md | Created: full documentation of device profile compatibility design |
+| docs/phase8/session-handoff.md | Updated: Session 5 results |
+
+### Tests run
+
+All tests pass (15 packages, 0 failures, 0 regressions):
+
+**New Go tests (41 total):**
+
+`internal/dra/claims_test.go` (19 tests):
+- `TestSummarizeClaimAllocations_NoClaims`
+- `TestSummarizeClaimAllocations_EmptyClaims`
+- `TestSummarizeClaimAllocations_AllAllocated`
+- `TestSummarizeClaimAllocations_AllPending`
+- `TestSummarizeClaimAllocations_MixedAllocatedAndPending`
+- `TestSummarizeClaimAllocations_FailedDeviceCondition`
+- `TestSummarizeClaimAllocations_MultipleFailed_PicksLatest`
+- `TestSummarizeClaimAllocations_SingleAllocated`
+- `TestSummarizeClaimAllocations_FailedTakesPrecedenceOverPending`
+- `TestSummarizeClaimAllocations_ReadyFalseIsFailure`
+- `TestFilterClaimsForRTJ_ByLabel`
+- `TestFilterClaimsForRTJ_ByTemplateAnnotation`
+- `TestFilterClaimsForRTJ_Empty`
+- `TestFilterClaimsForRTJ_SortedByName`
+- `TestIsDeviceFailureCondition_AllocationFailed`
+- `TestIsDeviceFailureCondition_DriverError`
+- `TestIsDeviceFailureCondition_ReadyFalse`
+- `TestIsDeviceFailureCondition_ReadyTrue`
+- `TestIsDeviceFailureCondition_NotFailure`
+
+`internal/controller/dra_status_test.go` (13 tests):
+- `TestObserveDRAClaimStatus_NoDevicesIsNoOp`
+- `TestObserveDRAClaimStatus_DisabledIsNoOp`
+- `TestObserveDRAClaimStatus_NoClaimsYet`
+- `TestObserveDRAClaimStatus_AllAllocated`
+- `TestObserveDRAClaimStatus_FailedClaim`
+- `TestObserveDRAClaimStatus_MixedAllocatedAndPending`
+- `TestObserveDRAClaimStatus_FiltersUnrelatedClaims`
+- `TestSyncClaimAllocationFields_SetsAllocated`
+- `TestSyncClaimAllocationFields_IdempotentForSameState`
+- `TestSyncClaimAllocationFields_NilDeviceStatusIsNoOp`
+- `TestSyncClaimAllocationFields_TracksFailure`
+- `TestSyncDRAClaimConditions_SetsFailureCondition`
+- `TestSyncDRAClaimConditions_ClearsOnSuccess`
+
+`internal/checkpoints/compatibility_test.go` (6 new tests):
+- `TestCheckManifestCompatibilitySameDeviceProfile`
+- `TestCheckManifestCompatibilityDifferentDeviceProfileRejected`
+- `TestCheckManifestCompatibilityCheckpointWithoutProfileRequestWithProfile`
+- `TestCheckManifestCompatibilityCheckpointWithProfileRequestWithout`
+- `TestCheckManifestCompatibilityBothWithoutDeviceProfile`
+- `TestCheckManifestCompatibilityDeviceProfileWithWorldSizeChange`
+
+`internal/checkpoints/selector_test.go` (3 new tests):
+- `TestSelectLatestCompatibleSkipsIncompatibleDeviceProfile`
+- `TestSelectLatestCompatibleDeviceProfileMatchSelected`
+- `TestSelectLatestCompatibleNoDeviceProfileBackwardCompat`
+
+**New Python tests (6 total):**
+
+`sdk/python/tests/test_manifest.py`:
+- `test_device_profile_fingerprint_round_trip`
+- `test_device_profile_fingerprint_in_serialized_json`
+- `test_device_profile_fingerprint_omitted_when_none`
+- `test_phase7_manifest_without_device_profile_decodes`
+- `test_device_profile_with_phase3_fields_coexist`
+- `test_manifest_completeness_with_all_phase8_fields`
+
+### Open questions remaining
+
+| OQ | Status |
+|---|---|
+| OQ4 | Unresolved -- Example DRA driver testing deferred to e2e session |
+| OQ9 | Unresolved -- DRA + ProvisioningRequest interaction test deferred to e2e |
+
+### Recommended next prompt
+
+See Session 6 below.
+
+---
+
+## Session 6: Phase 8 local dev/test profile
+
+**Date**: 2026-04-02
+
+### Mission
+
+Build the local Phase 8 development/test environment using a self-contained
+example DRA driver and Kueue deviceClassMappings. Provide deterministic
+infrastructure for DRA integration testing without real accelerators.
+
+### Decisions made
+
+1. **Self-contained DRA driver via DaemonSet + shell script.** Rather than
+   building the upstream `kubernetes-sigs/dra-example-driver` (requires Go
+   binary, custom container, kubelet plugin socket), the dev profile uses a
+   `bitnami/kubectl:1.33` DaemonSet that publishes ResourceSlice objects
+   directly via the API server. Trades kubelet-level device allocation for
+   simpler, zero-build setup. Sufficient for operator-level DRA integration
+   testing (template lifecycle, Kueue accounting, JobSet rendering,
+   checkpoint compatibility).
+
+2. **Driver name: `dra.example.dev`.** Scoped to dev environment. Published
+   in ResourceSlice `spec.driver` and matched by DeviceClass CEL selector
+   `device.driver == 'dra.example.dev'`.
+
+3. **4 simulated GPUs per node.** Each worker node gets a ResourceSlice with
+   4 devices named `gpu-0` through `gpu-3`, with attributes: `model`
+   (Example-GPU-v1), `memory` (80Gi), `index` (0-3). Total quota = 8 devices
+   for a 2-node kind cluster.
+
+4. **Kind node image bumped to v1.33.0 for stable DRA.** The
+   `PHASE8_KIND_NODE_IMAGE` variable defaults to `kindest/node:v1.33.0`.
+   The base dev stack (`dev-up.sh`) accepts `KIND_NODE_IMAGE` override,
+   which Phase 8 wires through. Existing dev profiles are unaffected
+   (they continue to use the default `kindest/node:v1.31.2`).
+
+5. **Kueue config: `deviceClassMappings` + `DynamicResourceAllocation`
+   feature gate.** Maps DeviceClass `example-gpu` to logical resource
+   `example.dev/gpu`. ClusterQueue covers `example.dev/gpu` with
+   nominalQuota=8. Kueue resolves DRA pod claims through the mapping.
+
+6. **ResourceFlavor and queues are Phase 8-specific.** Named `phase8-flavor`,
+   `phase8-cq`, `phase8-training` to avoid colliding with other phase
+   profiles that may be active on the same cluster.
+
+7. **Three sample RTJs cover the core test matrix:**
+   - `rtj-dra-launch.yaml`: successful DRA-backed launch (2 GPUs per worker)
+   - `rtj-dra-pause-resume.yaml`: pause/resume with same device profile
+     (compatible fingerprint)
+   - `rtj-dra-incompatible-profile.yaml`: different DeviceClass triggers
+     fail-closed checkpoint rejection
+
+8. **Smoke test validates 11 infrastructure checks.** Covers DRA API
+   availability, driver readiness, DeviceClass, ResourceSlices, Kueue
+   deviceClassMappings, queue health, RTJ CRD, and sample manifest
+   dry-run. Does not run e2e RTJ lifecycle tests.
+
+9. **OQ4 resolved: example DRA driver for local dev.** The self-contained
+   driver satisfies OQ4 for local testing. Full kubelet-level allocation
+   testing with the upstream driver is deferred to CI/production profiles.
+
+### Open questions resolved
+
+| OQ | Resolution |
+|---|---|
+| OQ4 | Resolved -- self-contained example DRA driver with simulated devices for local dev |
+
+### Open questions remaining
+
+| OQ | Status |
+|---|---|
+| OQ9 | Unresolved -- DRA + ProvisioningRequest interaction test deferred to e2e |
+
+### Files changed
+
+| File | Action |
+|---|---|
+| deploy/dev/phase8/dra-driver/00-namespace.yaml | Created: DRA driver namespace |
+| deploy/dev/phase8/dra-driver/05-device-class.yaml | Created: DeviceClass example-gpu |
+| deploy/dev/phase8/dra-driver/10-service-account.yaml | Created: Driver ServiceAccount |
+| deploy/dev/phase8/dra-driver/15-rbac.yaml | Created: Driver ClusterRole + ClusterRoleBinding |
+| deploy/dev/phase8/dra-driver/20-daemonset.yaml | Created: Driver DaemonSet (ResourceSlice publisher) |
+| deploy/dev/phase8/kueue/controller_manager_config.phase8.yaml | Created: Kueue config with deviceClassMappings |
+| deploy/dev/phase8/queues/00-resource-flavor.yaml | Created: Phase 8 ResourceFlavor |
+| deploy/dev/phase8/queues/10-cluster-queue.yaml | Created: ClusterQueue with example.dev/gpu quota |
+| deploy/dev/phase8/queues/20-local-queue.yaml | Created: LocalQueue phase8-training |
+| deploy/dev/phase8/samples/rtj-dra-launch.yaml | Created: DRA launch sample |
+| deploy/dev/phase8/samples/rtj-dra-pause-resume.yaml | Created: Pause/resume sample |
+| deploy/dev/phase8/samples/rtj-dra-incompatible-profile.yaml | Created: Incompatible profile sample |
+| hack/dev/install-phase8-profile.sh | Created: Full Phase 8 profile installer |
+| hack/dev/phase8-profile.sh | Created: Thin wrapper for re-apply |
+| hack/dev/install-phase8-dra-driver.sh | Created: DRA driver installer |
+| hack/dev/phase8-smoke.sh | Created: Infrastructure smoke test (11 checks) |
+| Makefile | Updated: Phase 8 variables and targets |
+| docs/phase8/dev-environment.md | Created: Full dev environment documentation |
+| docs/phase8/session-handoff.md | Updated: Session 6 results |
+
+### Makefile targets added
+
+| Target | Description |
+|---|---|
+| `make phase8-up` | Full environment: kind v1.33 + base stack + Phase 8 profile |
+| `make phase8-down` | Delete kind cluster |
+| `make phase8-status` | Show DRA driver, DeviceClass, ResourceSlices, queues |
+| `make phase8-load-images` | Load images into kind |
+| `make phase8-smoke` | 11-check infrastructure validation |
+| `make phase8-profile` | Re-apply Phase 8 profile on existing cluster |
+
 ### Recommended next prompt
 
 ```
-You are working on Phase 8 Session 4 for the checkpoint-native preemption
+You are working on Phase 8 Session 7 for the checkpoint-native preemption
 controller repo.
 
-Read docs/phase8/session-handoff.md for context (Sessions 1-3).
+Read docs/phase8/session-handoff.md for context (Sessions 1-6).
 
-Session 3 implemented:
-- internal/dra/profile.go: DeviceProfile fingerprinting (SHA256, order-independent)
-- internal/dra/templates.go: ResourceClaimTemplate builder from DeviceClaimSpec
-- internal/controller/dra_templates.go: reconcileDRATemplates() lifecycle
-  (create, idempotent, spec-drift recreate, orphan cleanup, status sync)
-- internal/controller/status_helpers.go: syncDeviceStatus(), clearDeviceStatus()
-- 52 new tests, all passing, zero regressions
+Session 6 implemented:
+- Local dev/test profile with self-contained example DRA driver
+- Kueue deviceClassMappings configuration
+- DRA-aware ClusterQueue with example.dev/gpu quota
+- 3 sample RTJs (launch, pause/resume, incompatible profile)
+- 11-check infrastructure smoke test
+- Makefile targets: phase8-up/down/status/load-images/smoke/profile
+- OQ4 resolved (example DRA driver for local dev)
 
-Now integrate the DRA template lifecycle into the main reconcile loop
-and implement DRA-aware child JobSet rendering:
-
-1. Wire reconcileDRATemplates() into the main Reconcile() method:
-   - Call early in the reconcile loop (before launch gate evaluation)
-   - Gate on worker mode (skip for ShouldSuppressRuntime)
-   - Ensure templates are ready before proceeding to launch
-
-2. Implement DRA-aware child JobSet rendering:
-   - Inject spec.resourceClaims[] into worker pod template
-   - Inject container resources.claims[] for targeted containers
-   - Apply after topology and podSetUpdate injection
-   - Use status.devices.resourceClaimTemplateRefs for template names
-
-3. Add RBAC markers for ResourceClaimTemplate CRUD.
-
-4. Update Kueue PodSet synthesis with DRA device request (OQ2 audit).
-
-5. Add unit tests for rendering and integration.
-
-6. Update docs/phase8/session-handoff.md with Session 4 results.
+Remaining Phase 8 work:
+1. Wire observeDRAClaimStatus() into the main Reconcile() loop
+   (call after reconcileDRATemplates(), update status, handle
+   requeue for pending allocations)
+2. Wire syncDeviceResumeFingerprint() into resume flow
+3. DRA + ProvisioningRequest interaction e2e test (OQ9)
+4. Full e2e test with Kueue deviceClassMappings accounting
+5. Phase 8 integration e2e tests (DRA launch, pause/resume,
+   incompatible profile rejection)
 ```
