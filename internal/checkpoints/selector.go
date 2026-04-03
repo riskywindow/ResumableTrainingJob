@@ -44,7 +44,7 @@ func SelectLatestCompatible(candidates []CheckpointManifest, request ResumeReque
 // partial admission the actual admitted world size may differ, and the operator
 // performs final validation at launch time.
 func ResumeRequestFromRTJ(rtj *v1alpha1.ResumableTrainingJob, clusterIdentity string) ResumeRequest {
-	return ResumeRequest{
+	req := ResumeRequest{
 		StorageRootURI:          rtj.Spec.Checkpoint.StorageURI,
 		ClusterIdentity:         clusterIdentity,
 		RTJIdentity:             rtj.Namespace + "/" + rtj.Name,
@@ -58,4 +58,11 @@ func ResumeRequestFromRTJ(rtj *v1alpha1.ResumableTrainingJob, clusterIdentity st
 		SupportedFormatVersions: []string{SupportedManifestFormatVersion},
 		AllowWorldSizeChange:    rtj.Spec.Resume.AllowWorldSizeChange,
 	}
+
+	// Phase 8: include device profile fingerprint when DRA is enabled.
+	if rtj.Status.Devices != nil && rtj.Status.Devices.CurrentDeviceProfileFingerprint != "" {
+		req.CurrentDeviceProfileFingerprint = rtj.Status.Devices.CurrentDeviceProfileFingerprint
+	}
+
+	return req
 }

@@ -46,6 +46,12 @@ type RenderInput struct {
 	// When non-nil, these updates are applied additively to the rendered
 	// JobSet after topology injection. Keys are PodSet names.
 	PodSetUpdates map[string]provisioning.PodSetUpdateEntry
+
+	// Phase 8: DRA claim injections. When non-nil, DRA resource claims
+	// are injected into the rendered JobSet pod templates after all other
+	// injections (topology, podSetUpdates). Each entry maps to one
+	// DeviceClaimSpec from the RTJ with its resolved template name.
+	DRAClaims []DRAClaimInjection
 }
 
 func RenderChildJobSet(input RenderInput) (*Object, error) {
@@ -165,6 +171,13 @@ func RenderChildJobSet(input RenderInput) (*Object, error) {
 		if !updateResult.Applied {
 			return nil, fmt.Errorf("apply podSetUpdates: %s", updateResult.ConflictMessage())
 		}
+	}
+
+	// Phase 8: inject DRA resource claims into pod templates. This is
+	// the last injection step so that DRA claims compose cleanly with
+	// topology constraints and podSetUpdates.
+	if len(input.DRAClaims) > 0 {
+		InjectDRAClaims(&obj.Spec, input.DRAClaims)
 	}
 
 	return obj, nil

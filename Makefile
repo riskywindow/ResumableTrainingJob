@@ -44,6 +44,7 @@ PHASE6_TRAINER_IMAGE ?= $(PHASE5_TRAINER_IMAGE)
 .PHONY: phase7-build-fake-provisioner e2e-phase7
 .PHONY: phase7-submit-success phase7-submit-fail
 .PHONY: phase7-inspect-launchgate phase7-inspect-workload phase7-inspect-provisioningrequest phase7-inspect-checkpoints
+.PHONY: phase8-up phase8-down phase8-status phase8-load-images phase8-smoke phase8-profile
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -587,6 +588,9 @@ e2e-phase6:
 PHASE7_RTJ_NAME ?= phase7-demo
 PHASE7_TRAINER_IMAGE ?= $(PHASE6_TRAINER_IMAGE)
 FAKE_PROVISIONER_IMAGE ?= fake-provisioner:dev
+PHASE8_RTJ_NAME ?= phase8-demo
+PHASE8_TRAINER_IMAGE ?= $(PHASE7_TRAINER_IMAGE)
+PHASE8_KIND_NODE_IMAGE ?= kindest/node:v1.33.0
 
 phase7-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
@@ -675,3 +679,81 @@ phase7-build-fake-provisioner:
 
 e2e-phase7:
 	RUN_KIND_E2E=1 PHASE7_TRAINER_IMAGE=$(PHASE7_TRAINER_IMAGE) go test ./test/e2e -run 'TestCapacityGuaranteedLaunch|TestProvisioningFailureRequeue|TestWaitForPodsReadyTimeout' -v -timeout 20m
+
+# ── Phase 8 targets ──────────────────────────────────────────────────
+#
+# phase8-up:          Create kind cluster with Kubernetes v1.33+ (DRA-capable),
+#                     install base stack, then apply Phase 8 DRA profile.
+#                     Installs: example DRA driver, DeviceClass, Kueue with
+#                     deviceClassMappings, ClusterQueue with DRA device quota.
+# phase8-down:        Delete the kind cluster.
+# phase8-status:      Show cluster state including DRA driver, DeviceClass,
+#                     ResourceSlices, queues, and deviceClassMappings.
+# phase8-load-images: Load images into the Phase 8 cluster.
+# phase8-smoke:       Run Phase 8 infrastructure smoke test. Verifies DRA APIs,
+#                     example driver, DeviceClass, ResourceSlices, Kueue
+#                     deviceClassMappings, queue health, and sample RTJ dry-run.
+# phase8-profile:     Apply/re-apply Phase 8 profile on existing cluster.
+#
+# The Phase 8 profile exercises:
+#   G1: Native DRA device requests on RTJ (DeviceClass + ResourceClaimTemplate)
+#   G2: Kueue deviceClassMappings for DRA device quota accounting
+#   G3: DRA-aware child JobSet rendering (claim injection)
+#   G4: Device profile checkpoint compatibility (fail-closed)
+#   G5: Deterministic local dev/test profile with simulated devices
+#
+# IMPORTANT: Phase 8 requires Kubernetes v1.33+ for stable DRA support.
+# The kind cluster uses PHASE8_KIND_NODE_IMAGE (default: kindest/node:v1.33.0).
+# This does NOT require real accelerators -- all devices are simulated.
+#
+# Sample RTJs in deploy/dev/phase8/samples/:
+#   rtj-dra-launch.yaml            — Successful DRA-backed launch (2 GPUs)
+#   rtj-dra-pause-resume.yaml      — Pause/resume with same device profile
+#   rtj-dra-incompatible-profile.yaml — Incompatible device profile rejection
+
+phase8-up:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  KIND_NODE_IMAGE=$(PHASE8_KIND_NODE_IMAGE) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/dev-up.sh
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/install-phase8-profile.sh
+
+phase8-down:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-down.sh
+
+phase8-status:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/status.sh
+	@echo
+	@echo "phase8 DRA driver:"
+	@kubectl -n dra-example-driver get daemonset dra-example-driver --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (not deployed)"
+	@echo
+	@echo "phase8 DeviceClass:"
+	@kubectl get deviceclasses.resource.k8s.io example-gpu --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (not found)"
+	@echo
+	@echo "phase8 ResourceSlices:"
+	@kubectl get resourceslices -l app.kubernetes.io/managed-by=dra-example-driver --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+	@echo "phase8 queues:"
+	@kubectl get clusterqueues.kueue.x-k8s.io phase8-cq --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@kubectl get localqueues.kueue.x-k8s.io -n $(DEV_NAMESPACE) phase8-training --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+	@echo "phase8 Kueue deviceClassMappings:"
+	@kubectl -n kueue-system get configmap kueue-manager-config -o jsonpath='{.data.controller_manager_config\.yaml}' --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null | grep -A3 'deviceClassMappings' || echo "  (not configured)"
+	@echo
+
+phase8-load-images:
+	@set -euo pipefail; \
+	for image in $(IMAGES); do \
+		echo "loading $$image into kind cluster $(KIND_CLUSTER_NAME)"; \
+		kind load docker-image --name $(KIND_CLUSTER_NAME) "$$image"; \
+	done
+
+phase8-smoke:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/phase8-smoke.sh
+
+phase8-profile:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/phase8-profile.sh

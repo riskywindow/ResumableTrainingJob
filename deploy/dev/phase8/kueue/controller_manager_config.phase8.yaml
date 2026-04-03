@@ -1,0 +1,73 @@
+# Kueue controller manager configuration for Phase 8.
+#
+# Extends the Phase 7 config with:
+#   - deviceClassMappings: maps DeviceClass "example-gpu" to a logical
+#     resource name "example.dev/gpu" for ClusterQueue quota accounting.
+#   - DynamicResourceAllocation feature gate enabled.
+#   - waitForPodsReady carried from Phase 7.
+#   - Standard RTJ external framework integration.
+#
+# See docs/phase8/dev-environment.md for the design rationale.
+apiVersion: config.kueue.x-k8s.io/v1beta1
+kind: Configuration
+health:
+  healthProbeBindAddress: :8081
+metrics:
+  bindAddress: :8443
+  enableClusterQueueResources: true
+webhook:
+  port: 9443
+leaderElection:
+  leaderElect: true
+  resourceName: c1f6bfd2.kueue.x-k8s.io
+controller:
+  groupKindConcurrency:
+    Job.batch: 5
+    Pod: 5
+    Workload.kueue.x-k8s.io: 5
+    LocalQueue.kueue.x-k8s.io: 1
+    ClusterQueue.kueue.x-k8s.io: 1
+    ResourceFlavor.kueue.x-k8s.io: 1
+clientConnection:
+  qps: 50
+  burst: 100
+manageJobsWithoutQueueName: false
+managedJobsNamespaceSelector:
+  matchLabels:
+    checkpoint-native.dev/kueue-managed: "true"
+# Phase 7: waitForPodsReady detects startup failures and triggers recovery.
+waitForPodsReady:
+  enable: true
+  timeout: 120s
+  requeuingStrategy:
+    timestamp: Eviction
+    backoffLimitCount: 3
+    backoffBaseSeconds: 10
+    backoffMaxSeconds: 300
+featureGates:
+  ProvisioningACC: true
+  DynamicResourceAllocation: true
+# Phase 8: deviceClassMappings maps DRA DeviceClasses to logical resource
+# names that can be used in ClusterQueue resourceGroups for quota accounting.
+# Kueue resolves DRA pod claims through these mappings to determine the
+# resource cost of a Workload.
+resources:
+  deviceClassMappings:
+    - deviceClassName: example-gpu
+      resourceName: example.dev/gpu
+integrations:
+  frameworks:
+    - "batch/job"
+    - "kubeflow.org/mpijob"
+    - "ray.io/rayjob"
+    - "ray.io/raycluster"
+    - "jobset.x-k8s.io/jobset"
+    - "kubeflow.org/paddlejob"
+    - "kubeflow.org/pytorchjob"
+    - "kubeflow.org/tfjob"
+    - "kubeflow.org/xgboostjob"
+    - "kubeflow.org/jaxjob"
+    - "trainer.kubeflow.org/trainjob"
+    - "workload.codeflare.dev/appwrapper"
+  externalFrameworks:
+    - ResumableTrainingJob.v1alpha1.training.checkpoint.example.io

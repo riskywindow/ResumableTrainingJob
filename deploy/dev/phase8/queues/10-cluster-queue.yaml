@@ -1,0 +1,36 @@
+# Phase 8: ClusterQueue with DRA device resource accounting.
+#
+# This queue covers cpu, memory, AND the logical DRA resource example.dev/gpu
+# that Kueue resolves via deviceClassMappings from the "example-gpu" DeviceClass.
+#
+# Quota: 8 simulated GPUs (matching 2 nodes x 4 devices each from the
+# example DRA driver DaemonSet).
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: phase8-cq
+  labels:
+    checkpoint-native.dev/profile: phase8-dra
+spec:
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+        - example.dev/gpu
+      flavors:
+        - name: phase8-flavor
+          resources:
+            - name: cpu
+              nominalQuota: 2
+            - name: memory
+              nominalQuota: 2Gi
+            - name: example.dev/gpu
+              nominalQuota: 8
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Never
+    borrowWithinCohort:
+      maxPriorityThreshold: 0

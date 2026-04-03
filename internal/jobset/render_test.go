@@ -625,6 +625,150 @@ func testRTJWithNodeSelector() *trainingv1alpha1.ResumableTrainingJob {
 	return rtj
 }
 
+// --- Phase 8 DRA Render Integration Tests ---
+
+func TestRenderChildJobSetInjectsDRAClaims(t *testing.T) {
+	rtj := testRTJ()
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                  rtj,
+		RunAttempt:           1,
+		JobSetName:           "counter-run-1",
+		ControlConfigMapName: "counter-run-1-control",
+		DRAClaims: []DRAClaimInjection{
+			{ClaimName: "gpu", TemplateName: "counter-gpu", Containers: []string{"trainer"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	pod := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec
+
+	// Verify PodResourceClaim was injected.
+	if len(pod.ResourceClaims) != 1 {
+		t.Fatalf("expected 1 PodResourceClaim, got %d", len(pod.ResourceClaims))
+	}
+	if pod.ResourceClaims[0].Name != "gpu" {
+		t.Fatalf("expected PodResourceClaim name 'gpu', got %q", pod.ResourceClaims[0].Name)
+	}
+	if pod.ResourceClaims[0].ResourceClaimTemplateName == nil ||
+		*pod.ResourceClaims[0].ResourceClaimTemplateName != "counter-gpu" {
+		t.Fatalf("expected ResourceClaimTemplateName 'counter-gpu', got %v", pod.ResourceClaims[0].ResourceClaimTemplateName)
+	}
+
+	// Verify container claim was injected.
+	container := pod.Containers[0]
+	if len(container.Resources.Claims) != 1 {
+		t.Fatalf("expected 1 container ResourceClaim, got %d", len(container.Resources.Claims))
+	}
+	if container.Resources.Claims[0].Name != "gpu" {
+		t.Fatalf("expected container claim name 'gpu', got %q", container.Resources.Claims[0].Name)
+	}
+}
+
+func TestRenderChildJobSetNoDRAWhenEmpty(t *testing.T) {
+	rtj := testRTJ()
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                  rtj,
+		RunAttempt:           1,
+		JobSetName:           "counter-run-1",
+		ControlConfigMapName: "counter-run-1-control",
+		// No DRAClaims.
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	pod := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec
+	if len(pod.ResourceClaims) != 0 {
+		t.Fatalf("expected 0 PodResourceClaims when DRA not configured, got %d", len(pod.ResourceClaims))
+	}
+	container := pod.Containers[0]
+	if len(container.Resources.Claims) != 0 {
+		t.Fatalf("expected 0 container ResourceClaims when DRA not configured, got %d", len(container.Resources.Claims))
+	}
+}
+
+func TestRenderChildJobSetNoKueueManagementOnChildWithDRA(t *testing.T) {
+	rtj := testRTJ()
+	rtj.Spec.Runtime.Template.Metadata = &trainingv1alpha1.EmbeddedObjectMetadata{
+		Labels: map[string]string{
+			"app.kubernetes.io/name": "counter",
+			"kueue.x-k8s.io/queue-name": "some-queue",
+		},
+	}
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                  rtj,
+		RunAttempt:           1,
+		JobSetName:           "counter-run-1",
+		ControlConfigMapName: "counter-run-1-control",
+		DRAClaims: []DRAClaimInjection{
+			{ClaimName: "gpu", TemplateName: "counter-gpu", Containers: []string{"trainer"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	// Kueue labels must still be stripped even when DRA is active.
+	if _, found := rendered.Metadata.Labels[QueueLabelKey]; found {
+		t.Fatalf("expected queue label to be stripped from child JobSet with DRA")
+	}
+	if got := rendered.Metadata.Labels[ManagedByLabelKey]; got != ManagedByLabelValue {
+		t.Fatalf("expected managed-by label %q, got %q", ManagedByLabelValue, got)
+	}
+
+	// DRA claims should still be present.
+	pod := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec
+	if len(pod.ResourceClaims) != 1 {
+		t.Fatalf("expected DRA claims to be present alongside Kueue stripping, got %d", len(pod.ResourceClaims))
+	}
+}
+
+func TestRenderChildJobSetDRAWithTopologyCoexist(t *testing.T) {
+	rtj := testRTJ()
+	topoResult := &topology.ParseResult{
+		PodSets: map[string]*topology.PodSetTopology{
+			"trainer": {
+				PodSetName: "trainer",
+				Levels:     []string{"topology.kubernetes.io/zone"},
+				Domains: []topology.DomainAssignment{
+					{Labels: map[string]string{"topology.kubernetes.io/zone": "us-east-1a"}, Count: 2},
+				},
+			},
+		},
+	}
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                  rtj,
+		RunAttempt:           1,
+		JobSetName:           "counter-run-1",
+		ControlConfigMapName: "counter-run-1-control",
+		TopologyResult:       topoResult,
+		DRAClaims: []DRAClaimInjection{
+			{ClaimName: "gpu", TemplateName: "counter-gpu", Containers: []string{"trainer"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	pod := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec
+
+	// Topology nodeSelector should be present.
+	if pod.NodeSelector == nil || pod.NodeSelector["topology.kubernetes.io/zone"] != "us-east-1a" {
+		t.Fatalf("expected topology nodeSelector, got %v", pod.NodeSelector)
+	}
+
+	// DRA claims should also be present.
+	if len(pod.ResourceClaims) != 1 {
+		t.Fatalf("expected 1 PodResourceClaim with topology, got %d", len(pod.ResourceClaims))
+	}
+}
+
 func testRTJ() *trainingv1alpha1.ResumableTrainingJob {
 	rtj := &trainingv1alpha1.ResumableTrainingJob{
 		ObjectMeta: metav1.ObjectMeta{

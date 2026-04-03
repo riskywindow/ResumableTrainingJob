@@ -3,11 +3,13 @@ package kueue
 import (
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
+	"github.com/example/checkpoint-native-preemption-controller/internal/dra"
 	rtjjobset "github.com/example/checkpoint-native-preemption-controller/internal/jobset"
 )
 
@@ -75,6 +77,14 @@ func PodSetsFromRTJTemplate(job *trainingv1alpha1.ResumableTrainingJob) ([]kueue
 		applyTopologyRequests(podSets, job.Spec.Topology, workerName, &spec)
 	}
 
+	// Phase 8: when DRA devices are configured, inject DRA resource claims
+	// into pod templates so Kueue can account device classes via
+	// deviceClassMappings. Template names are computed deterministically
+	// from the RTJ name and claim name.
+	if job.IsDevicesEnabled() {
+		injectDRAIntoPodSets(podSets, job)
+	}
+
 	return podSets, nil
 }
 
@@ -99,4 +109,72 @@ func podsCountPerReplica(rj *rtjjobset.ReplicatedJob) int32 {
 
 func podsCount(rj *rtjjobset.ReplicatedJob) int32 {
 	return ptr.Deref(rj.Replicas, 1) * podsCountPerReplica(rj)
+}
+
+// injectDRAIntoPodSets adds DRA resource claim references to PodSet pod
+// templates for Kueue deviceClassMappings-based accounting. For each claim
+// in spec.devices.claims, a PodResourceClaim and container ResourceClaim
+// are added to PodSets where at least one container matches.
+func injectDRAIntoPodSets(podSets []kueuev1beta2.PodSet, job *trainingv1alpha1.ResumableTrainingJob) {
+	if job.Spec.Devices == nil || len(job.Spec.Devices.Claims) == 0 {
+		return
+	}
+
+	for _, claim := range job.Spec.Devices.Claims {
+		templateName := dra.TemplateNameForClaim(job.Name, claim.Name)
+
+		for i := range podSets {
+			pod := &podSets[i].Template.Spec
+
+			// Only inject if at least one container matches.
+			if !podHasTargetContainer(pod, claim.Containers) {
+				continue
+			}
+
+			pod.ResourceClaims = append(pod.ResourceClaims, corev1.PodResourceClaim{
+				Name:                      claim.Name,
+				ResourceClaimTemplateName: ptr.To(templateName),
+			})
+
+			for ci := range pod.Containers {
+				if isTargetContainer(pod.Containers[ci].Name, claim.Containers) {
+					pod.Containers[ci].Resources.Claims = append(
+						pod.Containers[ci].Resources.Claims,
+						corev1.ResourceClaim{Name: claim.Name},
+					)
+				}
+			}
+		}
+	}
+}
+
+// podHasTargetContainer returns true if at least one container in the pod
+// matches the target container list. When targets is empty, returns true
+// if there are any containers.
+func podHasTargetContainer(pod *corev1.PodSpec, targets []string) bool {
+	if len(targets) == 0 {
+		return len(pod.Containers) > 0
+	}
+	for _, t := range targets {
+		for _, c := range pod.Containers {
+			if c.Name == t {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isTargetContainer returns true if the container name appears in the
+// target container list. When targets is empty, all containers match.
+func isTargetContainer(name string, targets []string) bool {
+	if len(targets) == 0 {
+		return true
+	}
+	for _, t := range targets {
+		if t == name {
+			return true
+		}
+	}
+	return false
 }

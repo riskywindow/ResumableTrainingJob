@@ -146,7 +146,7 @@ func (r *ResumableTrainingJobReconciler) resumeCheckpointForAttempt(
 		selected := *job.Status.SelectedCheckpoint
 		return &selected, true, nil
 	}
-	return r.checkpointCatalog().SelectResumeCheckpoint(ctx, checkpoints.ResumeRequest{
+	req := checkpoints.ResumeRequest{
 		StorageRootURI:          job.Spec.Checkpoint.StorageURI,
 		ClusterIdentity:         rtjjobset.DefaultClusterIdentity,
 		RTJIdentity:             job.Name,
@@ -159,7 +159,14 @@ func (r *ResumableTrainingJobReconciler) resumeCheckpointForAttempt(
 		ShardingMode:            job.Spec.Runtime.ShardingMode,
 		SupportedFormatVersions: []string{checkpoints.SupportedManifestFormatVersion},
 		AllowWorldSizeChange:    job.Spec.Resume.AllowWorldSizeChange,
-	})
+	}
+
+	// Phase 8: include device profile fingerprint when DRA is enabled.
+	if job.Status.Devices != nil && job.Status.Devices.CurrentDeviceProfileFingerprint != "" {
+		req.CurrentDeviceProfileFingerprint = job.Status.Devices.CurrentDeviceProfileFingerprint
+	}
+
+	return r.checkpointCatalog().SelectResumeCheckpoint(ctx, req)
 }
 
 func (r *ResumableTrainingJobReconciler) createRunAttemptResources(
@@ -192,6 +199,8 @@ func (r *ResumableTrainingJobReconciler) createRunAttemptResources(
 		renderInput.OriginalWorldSize = job.Spec.Identity.WorldSize
 		renderInput.AllowWorldSizeChange = job.Spec.Resume.AllowWorldSizeChange
 	}
+	// Phase 8: populate DRA claim injections from RTJ spec + status.
+	renderInput.DRAClaims = rtjjobset.BuildDRAClaimInjections(job)
 	renderedJobSet, err := rtjjobset.RenderChildJobSetUnstructured(renderInput)
 	if err != nil {
 		return "", "", fmt.Errorf("render child JobSet: %w", err)

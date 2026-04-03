@@ -1,0 +1,37 @@
+# Phase 8: RBAC for the example DRA driver.
+#
+# The driver needs permissions to:
+#   - Manage ResourceSlice objects (its own inventory)
+#   - Read DeviceClass objects
+#   - Read Node objects (for node name)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dra-example-driver
+  labels:
+    checkpoint-native.dev/profile: phase8-dra
+rules:
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceslices"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["deviceclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dra-example-driver
+  labels:
+    checkpoint-native.dev/profile: phase8-dra
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dra-example-driver
+subjects:
+  - kind: ServiceAccount
+    name: dra-example-driver
+    namespace: dra-example-driver

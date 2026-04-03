@@ -43,6 +43,14 @@ type CheckpointManifest struct {
 	// restored at a different world size via DCP resharding. nil is treated
 	// as false (Phase 2 backward compatibility).
 	CrossSizeRestoreSupported *bool `json:"crossSizeRestoreSupported,omitempty"`
+
+	// Phase 8 fields: optional, empty for Phase 7 and earlier manifests.
+	// DeviceProfileFingerprint is the SHA256 fingerprint of the DRA device
+	// profile that was active when this checkpoint was saved. Empty when
+	// the checkpoint was saved without DRA device spec (Phase 7 behavior).
+	// Used for fail-closed checkpoint compatibility: a checkpoint saved
+	// with one device profile cannot be restored under a different profile.
+	DeviceProfileFingerprint string `json:"deviceProfileFingerprint,omitempty"`
 	StorageRootURI      string     `json:"storageRootURI"`
 	ManifestURI         string     `json:"manifestURI,omitempty"`
 	Artifacts           []Artifact `json:"artifacts"`

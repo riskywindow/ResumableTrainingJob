@@ -361,3 +361,276 @@ func testRTJForPodSets(t *testing.T) *trainingv1alpha1.ResumableTrainingJob {
 	rtj.Default()
 	return rtj
 }
+
+// --- Phase 8 DRA PodSet Tests ---
+
+func TestPodSetsFromRTJTemplateInjectsDRAClaims(t *testing.T) {
+	rtj := testRTJForPodSets(t)
+	rtj.ObjectMeta.Name = "demo-rtj"
+	rtj.Spec.Devices = &trainingv1alpha1.DeviceSpec{
+		Mode: trainingv1alpha1.DeviceModeDRA,
+		Claims: []trainingv1alpha1.DeviceClaimSpec{
+			{
+				Name:       "gpu",
+				Containers: []string{"trainer"},
+				Request: trainingv1alpha1.DeviceRequestSpec{
+					DeviceClassName: "gpu.nvidia.com",
+					Count:           8,
+				},
+			},
+		},
+	}
+
+	podSets, err := PodSetsFromRTJTemplate(rtj)
+	if err != nil {
+		t.Fatalf("build pod sets: %v", err)
+	}
+
+	// Both PodSets have a "trainer" container, so both should get the claim.
+	for _, ps := range podSets {
+		pod := ps.Template.Spec
+		if len(pod.ResourceClaims) != 1 {
+			t.Fatalf("PodSet %q: expected 1 PodResourceClaim, got %d", ps.Name, len(pod.ResourceClaims))
+		}
+		if pod.ResourceClaims[0].Name != "gpu" {
+			t.Fatalf("PodSet %q: expected claim name 'gpu', got %q", ps.Name, pod.ResourceClaims[0].Name)
+		}
+		if pod.ResourceClaims[0].ResourceClaimTemplateName == nil {
+			t.Fatalf("PodSet %q: expected ResourceClaimTemplateName to be set", ps.Name)
+		}
+		expectedTemplateName := "demo-rtj-gpu"
+		if *pod.ResourceClaims[0].ResourceClaimTemplateName != expectedTemplateName {
+			t.Fatalf("PodSet %q: expected template name %q, got %q", ps.Name, expectedTemplateName, *pod.ResourceClaims[0].ResourceClaimTemplateName)
+		}
+
+		// The "trainer" container should have the claim attached.
+		var trainerFound bool
+		for _, c := range pod.Containers {
+			if c.Name == "trainer" {
+				trainerFound = true
+				if len(c.Resources.Claims) != 1 {
+					t.Fatalf("PodSet %q: trainer container: expected 1 claim, got %d", ps.Name, len(c.Resources.Claims))
+				}
+				if c.Resources.Claims[0].Name != "gpu" {
+					t.Fatalf("PodSet %q: trainer container: expected claim 'gpu', got %q", ps.Name, c.Resources.Claims[0].Name)
+				}
+			}
+		}
+		if !trainerFound {
+			t.Fatalf("PodSet %q: 'trainer' container not found", ps.Name)
+		}
+	}
+}
+
+func TestPodSetsFromRTJTemplateNoDRAWhenDisabled(t *testing.T) {
+	rtj := testRTJForPodSets(t)
+	rtj.Spec.Devices = &trainingv1alpha1.DeviceSpec{
+		Mode: trainingv1alpha1.DeviceModeDisabled,
+	}
+
+	podSets, err := PodSetsFromRTJTemplate(rtj)
+	if err != nil {
+		t.Fatalf("build pod sets: %v", err)
+	}
+
+	for _, ps := range podSets {
+		pod := ps.Template.Spec
+		if len(pod.ResourceClaims) != 0 {
+			t.Fatalf("PodSet %q: expected 0 PodResourceClaims when disabled, got %d", ps.Name, len(pod.ResourceClaims))
+		}
+	}
+}
+
+func TestPodSetsFromRTJTemplateNoDRAWhenNilDevices(t *testing.T) {
+	rtj := testRTJForPodSets(t)
+	rtj.Spec.Devices = nil
+
+	podSets, err := PodSetsFromRTJTemplate(rtj)
+	if err != nil {
+		t.Fatalf("build pod sets: %v", err)
+	}
+
+	for _, ps := range podSets {
+		pod := ps.Template.Spec
+		if len(pod.ResourceClaims) != 0 {
+			t.Fatalf("PodSet %q: expected 0 PodResourceClaims when nil, got %d", ps.Name, len(pod.ResourceClaims))
+		}
+	}
+}
+
+func TestPodSetsFromRTJTemplateDRATargetsCorrectContainers(t *testing.T) {
+	rtj := testRTJForPodSets(t)
+	rtj.ObjectMeta.Name = "demo-rtj"
+	// Target only "trainer" container. The driver PodSet has "trainer" container
+	// and the worker PodSet has "trainer" container, so both get the claim.
+	rtj.Spec.Devices = &trainingv1alpha1.DeviceSpec{
+		Mode: trainingv1alpha1.DeviceModeDRA,
+		Claims: []trainingv1alpha1.DeviceClaimSpec{
+			{
+				Name:       "gpu",
+				Containers: []string{"trainer"},
+				Request: trainingv1alpha1.DeviceRequestSpec{
+					DeviceClassName: "gpu.nvidia.com",
+					Count:           8,
+				},
+			},
+		},
+	}
+
+	podSets, err := PodSetsFromRTJTemplate(rtj)
+	if err != nil {
+		t.Fatalf("build pod sets: %v", err)
+	}
+
+	// Both PodSets have "trainer" container, so both get the claim.
+	for _, ps := range podSets {
+		pod := ps.Template.Spec
+		if len(pod.ResourceClaims) != 1 {
+			t.Fatalf("PodSet %q: expected 1 PodResourceClaim, got %d", ps.Name, len(pod.ResourceClaims))
+		}
+	}
+}
+
+func TestPodSetsFromRTJTemplateDRASkipsNonMatchingContainers(t *testing.T) {
+	rtj := testRTJForPodSets(t)
+	rtj.ObjectMeta.Name = "demo-rtj"
+	// Target a container that doesn't exist in the template.
+	rtj.Spec.Devices = &trainingv1alpha1.DeviceSpec{
+		Mode: trainingv1alpha1.DeviceModeDRA,
+		Claims: []trainingv1alpha1.DeviceClaimSpec{
+			{
+				Name:       "gpu",
+				Containers: []string{"nonexistent-container"},
+				Request: trainingv1alpha1.DeviceRequestSpec{
+					DeviceClassName: "gpu.nvidia.com",
+					Count:           8,
+				},
+			},
+		},
+	}
+
+	podSets, err := PodSetsFromRTJTemplate(rtj)
+	if err != nil {
+		t.Fatalf("build pod sets: %v", err)
+	}
+
+	// No PodSet should have the claim since no container matches.
+	for _, ps := range podSets {
+		pod := ps.Template.Spec
+		if len(pod.ResourceClaims) != 0 {
+			t.Fatalf("PodSet %q: expected 0 PodResourceClaims for non-matching container, got %d", ps.Name, len(pod.ResourceClaims))
+		}
+	}
+}
+
+func TestPodSetsFromRTJTemplateDRATemplateNameFormat(t *testing.T) {
+	rtj := testRTJForPodSets(t)
+	rtj.ObjectMeta.Name = "my-training-job"
+	rtj.Spec.Devices = &trainingv1alpha1.DeviceSpec{
+		Mode: trainingv1alpha1.DeviceModeDRA,
+		Claims: []trainingv1alpha1.DeviceClaimSpec{
+			{
+				Name:       "accelerator",
+				Containers: []string{"trainer"},
+				Request: trainingv1alpha1.DeviceRequestSpec{
+					DeviceClassName: "gpu.nvidia.com",
+					Count:           4,
+				},
+			},
+		},
+	}
+
+	podSets, err := PodSetsFromRTJTemplate(rtj)
+	if err != nil {
+		t.Fatalf("build pod sets: %v", err)
+	}
+
+	// Verify the template name follows the "<rtj-name>-<claim-name>" pattern.
+	for _, ps := range podSets {
+		for _, rc := range ps.Template.Spec.ResourceClaims {
+			expected := "my-training-job-accelerator"
+			if rc.ResourceClaimTemplateName == nil || *rc.ResourceClaimTemplateName != expected {
+				t.Fatalf("PodSet %q: expected template name %q, got %v", ps.Name, expected, rc.ResourceClaimTemplateName)
+			}
+		}
+	}
+}
+
+func TestPodSetsFromRTJTemplateDRAMultipleClaims(t *testing.T) {
+	rtj := testRTJForPodSets(t)
+	rtj.ObjectMeta.Name = "multi-claim"
+	rtj.Spec.Devices = &trainingv1alpha1.DeviceSpec{
+		Mode: trainingv1alpha1.DeviceModeDRA,
+		Claims: []trainingv1alpha1.DeviceClaimSpec{
+			{
+				Name:       "gpu",
+				Containers: []string{"trainer"},
+				Request:    trainingv1alpha1.DeviceRequestSpec{DeviceClassName: "gpu.nvidia.com", Count: 8},
+			},
+			{
+				Name:       "rdma",
+				Containers: []string{"trainer"},
+				Request:    trainingv1alpha1.DeviceRequestSpec{DeviceClassName: "rdma.example.com", Count: 1},
+			},
+		},
+	}
+
+	podSets, err := PodSetsFromRTJTemplate(rtj)
+	if err != nil {
+		t.Fatalf("build pod sets: %v", err)
+	}
+
+	for _, ps := range podSets {
+		pod := ps.Template.Spec
+		if len(pod.ResourceClaims) != 2 {
+			t.Fatalf("PodSet %q: expected 2 PodResourceClaims for multi-claim, got %d", ps.Name, len(pod.ResourceClaims))
+		}
+	}
+}
+
+func TestPodSetsFromRTJTemplateDRAPreservesExistingPodSetBehavior(t *testing.T) {
+	// Verify that DRA injection doesn't break Phase 3/4 behavior.
+	SetExperimentalPartialAdmission(true)
+	defer SetExperimentalPartialAdmission(false)
+
+	rtj := testRTJForPodSets(t)
+	rtj.ObjectMeta.Name = "combined"
+	rtj.Spec.Parallelism = &trainingv1alpha1.ParallelismSpec{
+		PreferredCount:         16,
+		MinCount:               ptr.To[int32](8),
+		PodSetName:             "worker",
+		EnablePartialAdmission: true,
+	}
+	rtj.Spec.Devices = &trainingv1alpha1.DeviceSpec{
+		Mode: trainingv1alpha1.DeviceModeDRA,
+		Claims: []trainingv1alpha1.DeviceClaimSpec{
+			{
+				Name:       "gpu",
+				Containers: []string{"trainer"},
+				Request:    trainingv1alpha1.DeviceRequestSpec{DeviceClassName: "gpu.nvidia.com", Count: 8},
+			},
+		},
+	}
+
+	podSets, err := PodSetsFromRTJTemplate(rtj)
+	if err != nil {
+		t.Fatalf("build pod sets: %v", err)
+	}
+
+	// Worker PodSet should have PreferredCount and MinCount from Phase 3.
+	worker := podSets[1]
+	if worker.Name != "worker" {
+		t.Fatalf("expected worker PodSet, got %q", worker.Name)
+	}
+	if worker.Count != 16 {
+		t.Fatalf("expected worker count=16 (preferredCount), got %d", worker.Count)
+	}
+	if worker.MinCount == nil || *worker.MinCount != 8 {
+		t.Fatalf("expected worker MinCount=8, got %v", worker.MinCount)
+	}
+
+	// DRA claims should also be present.
+	if len(worker.Template.Spec.ResourceClaims) != 1 {
+		t.Fatalf("expected 1 PodResourceClaim on worker, got %d", len(worker.Template.Spec.ResourceClaims))
+	}
+}

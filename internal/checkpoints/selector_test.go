@@ -193,6 +193,67 @@ func TestSelectLatestCompatibleEmptyCandidates(t *testing.T) {
 	}
 }
 
+func TestSelectLatestCompatibleSkipsIncompatibleDeviceProfile(t *testing.T) {
+	request := baseRequest()
+	request.CurrentDeviceProfileFingerprint = "fp-gpu-a100"
+
+	// Newer checkpoint has different device profile.
+	newer := testManifest("s3://bucket/demo/manifests/ckpt-3.manifest.json", "ckpt-3", 3, 12)
+	newer.DeviceProfileFingerprint = "fp-gpu-h100"
+	newer.CompletionTimestamp = "2026-03-21T12:00:20Z"
+
+	// Older checkpoint has matching device profile.
+	older := testManifest("s3://bucket/demo/manifests/ckpt-2.manifest.json", "ckpt-2", 2, 8)
+	older.DeviceProfileFingerprint = "fp-gpu-a100"
+	older.CompletionTimestamp = "2026-03-21T12:00:10Z"
+
+	selection, ok, err := SelectLatestCompatible([]CheckpointManifest{older, newer}, request)
+	if err != nil {
+		t.Fatalf("select latest compatible: %v", err)
+	}
+	if !ok || selection == nil {
+		t.Fatal("expected a compatible checkpoint to be selected")
+	}
+	if selection.CheckpointID != "ckpt-2" {
+		t.Fatalf("expected older checkpoint with matching device profile ckpt-2, got %s", selection.CheckpointID)
+	}
+}
+
+func TestSelectLatestCompatibleDeviceProfileMatchSelected(t *testing.T) {
+	request := baseRequest()
+	request.CurrentDeviceProfileFingerprint = "fp-gpu-a100"
+
+	ckpt := testManifest("s3://bucket/demo/manifests/ckpt-1.manifest.json", "ckpt-1", 1, 100)
+	ckpt.DeviceProfileFingerprint = "fp-gpu-a100"
+	ckpt.CompletionTimestamp = "2026-03-21T12:00:10Z"
+
+	selection, ok, err := SelectLatestCompatible([]CheckpointManifest{ckpt}, request)
+	if err != nil {
+		t.Fatalf("select latest compatible: %v", err)
+	}
+	if !ok || selection == nil {
+		t.Fatal("expected checkpoint with matching device profile to be selected")
+	}
+}
+
+func TestSelectLatestCompatibleNoDeviceProfileBackwardCompat(t *testing.T) {
+	// Request without device profile should select Phase 7 checkpoints.
+	request := baseRequest()
+	// CurrentDeviceProfileFingerprint is empty (no DRA).
+
+	ckpt := testManifest("s3://bucket/demo/manifests/ckpt-1.manifest.json", "ckpt-1", 1, 100)
+	ckpt.CompletionTimestamp = "2026-03-21T12:00:10Z"
+	// No DeviceProfileFingerprint (Phase 7 manifest).
+
+	selection, ok, err := SelectLatestCompatible([]CheckpointManifest{ckpt}, request)
+	if err != nil {
+		t.Fatalf("select latest compatible: %v", err)
+	}
+	if !ok || selection == nil {
+		t.Fatal("expected Phase 7 checkpoint to be selected when no DRA in request")
+	}
+}
+
 func testManifest(manifestURI, checkpointID string, runAttempt int32, globalStep int64) CheckpointManifest {
 	return CheckpointManifest{
 		CheckpointID:        checkpointID,

@@ -1,0 +1,10 @@
+# Phase 8: LocalQueue for DRA-backed training workloads.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: phase8-training
+  namespace: checkpoint-dev
+  labels:
+    checkpoint-native.dev/profile: phase8-dra
+spec:
+  clusterQueue: phase8-cq
