@@ -1014,3 +1014,362 @@ func TestManagerModePhase6WorkerHasNoPhase7Fields(t *testing.T) {
 		t.Fatal("expected hasPhase7RemoteStatus=false for Phase 6 worker")
 	}
 }
+
+// -------------------------------------------------------------------------
+// Phase 8: Remote DRA summary unit tests
+// -------------------------------------------------------------------------
+
+func TestBuildRemoteDRASummaryFullState(t *testing.T) {
+	job := controllerTestRTJ()
+	job.Status.Devices = &trainingv1alpha1.DeviceStatus{
+		DeviceMode:                      trainingv1alpha1.DeviceModeDRA,
+		CurrentDeviceProfileFingerprint: "sha256:abc123",
+		RequestedDeviceClasses:          []string{"example-gpu"},
+		ClaimAllocationState:            trainingv1alpha1.ClaimAllocationAllocated,
+		AllocatedClaimCount:             2,
+	}
+
+	summary := buildRemoteDRASummary(job)
+
+	if summary.DeviceMode != string(trainingv1alpha1.DeviceModeDRA) {
+		t.Fatalf("expected DeviceMode %q, got %q",
+			trainingv1alpha1.DeviceModeDRA, summary.DeviceMode)
+	}
+	if summary.DeviceProfileFingerprint != "sha256:abc123" {
+		t.Fatalf("expected fingerprint %q, got %q", "sha256:abc123", summary.DeviceProfileFingerprint)
+	}
+	if summary.ClaimAllocationState != string(trainingv1alpha1.ClaimAllocationAllocated) {
+		t.Fatalf("expected ClaimAllocationState %q, got %q",
+			trainingv1alpha1.ClaimAllocationAllocated, summary.ClaimAllocationState)
+	}
+	if summary.AllocatedClaimCount != 2 {
+		t.Fatalf("expected AllocatedClaimCount 2, got %d", summary.AllocatedClaimCount)
+	}
+	if len(summary.RequestedDeviceClasses) != 1 || summary.RequestedDeviceClasses[0] != "example-gpu" {
+		t.Fatalf("expected RequestedDeviceClasses [example-gpu], got %v", summary.RequestedDeviceClasses)
+	}
+}
+
+func TestBuildRemoteDRASummaryEmptyStatus(t *testing.T) {
+	// Phase 7 and earlier workers produce no device status.
+	job := controllerTestRTJ()
+
+	summary := buildRemoteDRASummary(job)
+
+	if summary.DeviceMode != "" {
+		t.Fatalf("expected empty DeviceMode for non-DRA worker, got %q", summary.DeviceMode)
+	}
+	if summary.DeviceProfileFingerprint != "" {
+		t.Fatalf("expected empty fingerprint for non-DRA worker, got %q", summary.DeviceProfileFingerprint)
+	}
+	if summary.ClaimAllocationState != "" {
+		t.Fatalf("expected empty ClaimAllocationState for non-DRA worker, got %q", summary.ClaimAllocationState)
+	}
+	if summary.AllocatedClaimCount != 0 {
+		t.Fatalf("expected AllocatedClaimCount 0 for non-DRA worker, got %d", summary.AllocatedClaimCount)
+	}
+}
+
+func TestBuildRemoteDRASummaryPendingClaims(t *testing.T) {
+	job := controllerTestRTJ()
+	job.Status.Devices = &trainingv1alpha1.DeviceStatus{
+		DeviceMode:                      trainingv1alpha1.DeviceModeDRA,
+		CurrentDeviceProfileFingerprint: "sha256:def456",
+		RequestedDeviceClasses:          []string{"example-gpu", "example-rdma"},
+		ClaimAllocationState:            trainingv1alpha1.ClaimAllocationPending,
+		AllocatedClaimCount:             0,
+	}
+
+	summary := buildRemoteDRASummary(job)
+
+	if summary.ClaimAllocationState != string(trainingv1alpha1.ClaimAllocationPending) {
+		t.Fatalf("expected ClaimAllocationState %q, got %q",
+			trainingv1alpha1.ClaimAllocationPending, summary.ClaimAllocationState)
+	}
+	if summary.AllocatedClaimCount != 0 {
+		t.Fatalf("expected AllocatedClaimCount 0, got %d", summary.AllocatedClaimCount)
+	}
+	if len(summary.RequestedDeviceClasses) != 2 {
+		t.Fatalf("expected 2 device classes, got %d", len(summary.RequestedDeviceClasses))
+	}
+}
+
+func TestHasPhase8RemoteStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(*trainingv1alpha1.ResumableTrainingJob)
+		expected bool
+	}{
+		{
+			name:     "no device status (Phase 7 worker)",
+			setup:    func(j *trainingv1alpha1.ResumableTrainingJob) {},
+			expected: false,
+		},
+		{
+			name: "DRA mode active",
+			setup: func(j *trainingv1alpha1.ResumableTrainingJob) {
+				j.Status.Devices = &trainingv1alpha1.DeviceStatus{
+					DeviceMode: trainingv1alpha1.DeviceModeDRA,
+				}
+			},
+			expected: true,
+		},
+		{
+			name: "Disabled mode is not Phase 8 active",
+			setup: func(j *trainingv1alpha1.ResumableTrainingJob) {
+				j.Status.Devices = &trainingv1alpha1.DeviceStatus{
+					DeviceMode: trainingv1alpha1.DeviceModeDisabled,
+				}
+			},
+			expected: false,
+		},
+		{
+			name: "empty mode is not Phase 8 active",
+			setup: func(j *trainingv1alpha1.ResumableTrainingJob) {
+				j.Status.Devices = &trainingv1alpha1.DeviceStatus{
+					DeviceMode: "",
+				}
+			},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			job := controllerTestRTJ()
+			tc.setup(job)
+			got := hasPhase8RemoteStatus(job)
+			if got != tc.expected {
+				t.Fatalf("expected %v, got %v", tc.expected, got)
+			}
+		})
+	}
+}
+
+// -------------------------------------------------------------------------
+// Phase 8: Integration tests - manager mode with Phase 8 worker DRA status
+// -------------------------------------------------------------------------
+
+func TestManagerModeReflectsPhase8WorkerDRAStatus(t *testing.T) {
+	// Scenario: the adapter mirrors a worker RTJ that has Phase 8 DRA
+	// active (device mode=DRA, claims allocated). The manager must
+	// preserve the Phase 8 status fields and NOT create local
+	// ResourceClaimTemplates.
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	now := metav1.NewTime(time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC))
+	rtj := controllerTestRTJ()
+	rtj.Spec.ManagedBy = trainingv1alpha1.MultiKueueControllerName
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.ObservedGeneration = rtj.Generation
+	// Worker is Running with DRA active.
+	rtj.Status.Phase = trainingv1alpha1.PhaseRunning
+	rtj.Status.ActiveJobSetName = "counter-run-1"
+	rtj.Status.CurrentRunAttempt = 1
+	// Phase 8 DRA status mirrored from worker.
+	rtj.Status.Devices = &trainingv1alpha1.DeviceStatus{
+		DeviceMode:                      trainingv1alpha1.DeviceModeDRA,
+		CurrentDeviceProfileFingerprint: "sha256:worker-fingerprint-001",
+		RequestedDeviceClasses:          []string{"example-gpu"},
+		ClaimAllocationState:            trainingv1alpha1.ClaimAllocationAllocated,
+		AllocatedClaimCount:             2,
+		ResourceClaimTemplateRefs: []trainingv1alpha1.ResourceClaimTemplateReference{
+			{Name: "counter-gpu", ClaimName: "gpu"},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj).
+		WithObjects(rtj).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{
+		Client:          c,
+		Scheme:          scheme,
+		Mode:            ModeManager,
+		Now:             func() metav1.Time { return now },
+		ClusterResolver: &remote.StaticClusterResolver{ClusterName: "worker-dra-1"},
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, c.Get(ctx, req.NamespacedName, &updated))
+
+	// Manager must NOT create local runtime.
+	mc := updated.Status.MultiCluster
+	if mc == nil {
+		t.Fatal("expected MultiCluster status")
+	}
+	if !mc.LocalExecutionSuppressed {
+		t.Fatal("expected LocalExecutionSuppressed to be true")
+	}
+	if mc.DispatchPhase != trainingv1alpha1.DispatchPhaseActive {
+		t.Fatalf("expected dispatch phase %q, got %q",
+			trainingv1alpha1.DispatchPhaseActive, mc.DispatchPhase)
+	}
+	if mc.RemotePhase != trainingv1alpha1.PhaseRunning {
+		t.Fatalf("expected remote phase %q, got %q",
+			trainingv1alpha1.PhaseRunning, mc.RemotePhase)
+	}
+
+	// Phase 8 device status survives the manager reconcile.
+	if updated.Status.Devices == nil {
+		t.Fatal("expected Phase 8 Devices to be preserved from worker mirror")
+	}
+	ds := updated.Status.Devices
+	if ds.DeviceMode != trainingv1alpha1.DeviceModeDRA {
+		t.Fatalf("expected device mode %q, got %q",
+			trainingv1alpha1.DeviceModeDRA, ds.DeviceMode)
+	}
+	if ds.CurrentDeviceProfileFingerprint != "sha256:worker-fingerprint-001" {
+		t.Fatalf("expected fingerprint %q, got %q",
+			"sha256:worker-fingerprint-001", ds.CurrentDeviceProfileFingerprint)
+	}
+	if ds.ClaimAllocationState != trainingv1alpha1.ClaimAllocationAllocated {
+		t.Fatalf("expected claim allocation state %q, got %q",
+			trainingv1alpha1.ClaimAllocationAllocated, ds.ClaimAllocationState)
+	}
+	if ds.AllocatedClaimCount != 2 {
+		t.Fatalf("expected allocated claim count 2, got %d", ds.AllocatedClaimCount)
+	}
+}
+
+func TestManagerModePhase7WorkerHasNoPhase8DRAFields(t *testing.T) {
+	// Scenario: a Phase 7 worker (no DRA features) mirrors status.
+	// The manager must still work correctly with no Phase 8 status fields.
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	now := metav1.NewTime(time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC))
+	rtj := controllerTestRTJ()
+	rtj.Spec.ManagedBy = trainingv1alpha1.MultiKueueControllerName
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.ObservedGeneration = rtj.Generation
+	// Phase 7 worker: Running, no DRA fields.
+	rtj.Status.Phase = trainingv1alpha1.PhaseRunning
+	rtj.Status.ActiveJobSetName = "counter-run-1"
+	rtj.Status.CurrentRunAttempt = 1
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj).
+		WithObjects(rtj).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{
+		Client:          c,
+		Scheme:          scheme,
+		Mode:            ModeManager,
+		Now:             func() metav1.Time { return now },
+		ClusterResolver: &remote.StaticClusterResolver{ClusterName: "worker-1"},
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, c.Get(ctx, req.NamespacedName, &updated))
+
+	mc := updated.Status.MultiCluster
+	if mc == nil {
+		t.Fatal("expected MultiCluster status")
+	}
+	if mc.DispatchPhase != trainingv1alpha1.DispatchPhaseActive {
+		t.Fatalf("expected dispatch phase %q, got %q",
+			trainingv1alpha1.DispatchPhaseActive, mc.DispatchPhase)
+	}
+
+	// No Phase 8 fields should be present from a Phase 7 worker.
+	if updated.Status.Devices != nil {
+		t.Fatal("expected no Devices from Phase 7 worker")
+	}
+
+	// hasPhase8RemoteStatus should be false.
+	if hasPhase8RemoteStatus(&updated) {
+		t.Fatal("expected hasPhase8RemoteStatus=false for Phase 7 worker")
+	}
+}
+
+func TestManagerModeDoesNotCreateResourceClaimTemplates(t *testing.T) {
+	// Scenario: a DRA-configured RTJ is submitted to the manager.
+	// The manager must NOT create any ResourceClaimTemplates locally,
+	// even though the RTJ spec includes DRA device claims.
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	now := metav1.NewTime(time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC))
+	rtj := controllerTestRTJ()
+	rtj.Spec.ManagedBy = trainingv1alpha1.MultiKueueControllerName
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.ObservedGeneration = rtj.Generation
+	// Spec includes DRA device claims.
+	rtj.Spec.Devices = &trainingv1alpha1.DeviceSpec{
+		Mode: trainingv1alpha1.DeviceModeDRA,
+		Claims: []trainingv1alpha1.DeviceClaimSpec{
+			{
+				Name:       "gpu",
+				Containers: []string{"trainer"},
+				Request: trainingv1alpha1.DeviceRequestSpec{
+					DeviceClassName: "example-gpu",
+					Count:           2,
+				},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj).
+		WithObjects(rtj).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{
+		Client:          c,
+		Scheme:          scheme,
+		Mode:            ModeManager,
+		Now:             func() metav1.Time { return now },
+		ClusterResolver: &remote.StaticClusterResolver{ClusterName: "worker-1"},
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	// Run several reconciles to be sure.
+	for i := 0; i < 5; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile %d failed: %v", i+1, err)
+		}
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, c.Get(ctx, req.NamespacedName, &updated))
+
+	// Manager must suppress local execution.
+	mc := updated.Status.MultiCluster
+	if mc == nil {
+		t.Fatal("expected MultiCluster status")
+	}
+	if !mc.LocalExecutionSuppressed {
+		t.Fatal("expected LocalExecutionSuppressed to be true")
+	}
+
+	// Manager must NOT have created status.devices (that's worker's job).
+	if updated.Status.Devices != nil {
+		t.Fatal("expected no Devices status on manager (templates not reconciled)")
+	}
+}

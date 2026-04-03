@@ -24,6 +24,7 @@ with simulated devices.
 | [api.md](api.md) | Phase 8 DRA device API reference |
 | [adr/0001-dra-accelerator-native-rtj.md](adr/0001-dra-accelerator-native-rtj.md) | ADR: native DRA device requests for RTJ |
 | [adr/0002-dra-api.md](adr/0002-dra-api.md) | ADR: DRA API shape decision |
+| [multicluster-compatibility.md](multicluster-compatibility.md) | Phase 8 DRA + Phase 6 multi-cluster compatibility |
 
 ## Pinned dependencies
 
