@@ -117,6 +117,15 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 	//     semantics, and podSetUpdates all apply identically to single-cluster
 	//     mode. The worker-side RTJ (created by the adapter) goes through
 	//     the same Reconcile path below.
+	//
+	// Phase 8 multi-cluster compatibility:
+	//   - Manager mode: suppression returns before reconcileDRATemplates(),
+	//     so the manager NEVER creates local ResourceClaimTemplates or
+	//     ResourceClaims for remote RTJs. Worker-side DRA status (devices.*)
+	//     is surfaced transparently via the adapter's full-status mirror.
+	//   - Worker mode: the full Phase 8 DRA path runs unchanged. Template
+	//     reconciliation, claim injection, and status observation all apply
+	//     identically to single-cluster mode.
 	if ShouldSuppressRuntime(r.Mode, &job) {
 		return r.reconcileManagerIntent(ctx, &job)
 	}
@@ -488,6 +497,21 @@ func (r *ResumableTrainingJobReconciler) reconcileManagerIntent(
 			"remoteProvisioningState", summary.ProvisioningState,
 			"remoteCapacityGuarantee", summary.CapacityGuaranteeActive,
 			"remoteStartupState", summary.StartupState,
+		)
+	}
+
+	// Phase 8: log worker-side DRA/device status when the adapter has
+	// mirrored Phase 8 fields. The manager does NOT create local
+	// ResourceClaimTemplates or ResourceClaims for remote RTJs — DRA
+	// helper objects are worker-local. This is observability only.
+	if hasRemoteStatusSignal(job) && hasPhase8RemoteStatus(job) {
+		draSummary := buildRemoteDRASummary(job)
+		logger.Info("manager mode: remote Phase 8 DRA status (from worker)",
+			"remoteDeviceMode", draSummary.DeviceMode,
+			"remoteDeviceFingerprint", draSummary.DeviceProfileFingerprint,
+			"remoteClaimAllocationState", draSummary.ClaimAllocationState,
+			"remoteAllocatedClaimCount", draSummary.AllocatedClaimCount,
+			"remoteRequestedDeviceClasses", draSummary.RequestedDeviceClasses,
 		)
 	}
 

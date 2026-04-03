@@ -272,6 +272,68 @@ func hasPhase7RemoteStatus(job *trainingv1alpha1.ResumableTrainingJob) bool {
 }
 
 // -------------------------------------------------------------------------
+// Phase 8: Remote DRA / device summary
+// -------------------------------------------------------------------------
+//
+// When the Kueue adapter mirrors the worker's full .status to the manager
+// RTJ, Phase 8 status fields (devices.*) are included in the mirror. The
+// manager controller does NOT populate these fields itself and does NOT
+// create ResourceClaimTemplates or ResourceClaims — they are entirely
+// worker-sourced.
+//
+// buildRemoteDRASummary extracts key Phase 8 DRA indicators from the
+// already-mirrored status for structured logging on the manager side.
+// This enables operators to observe worker-side device allocation state
+// from the manager cluster's logs.
+
+// remoteDRASummary captures Phase 8 DRA state extracted from a manager-side
+// RTJ whose status was mirrored from the worker by the Kueue adapter.
+// Used for manager-side observability, not for decision-making.
+type remoteDRASummary struct {
+	// DeviceMode is the worker's device mode (DRA, Disabled, or empty).
+	DeviceMode string
+
+	// DeviceProfileFingerprint is the worker's current device profile fingerprint.
+	DeviceProfileFingerprint string
+
+	// ClaimAllocationState is the worker's claim allocation state
+	// (Pending, Allocated, Failed, or empty).
+	ClaimAllocationState string
+
+	// AllocatedClaimCount is the count of allocated claims on the worker.
+	AllocatedClaimCount int32
+
+	// RequestedDeviceClasses lists the device classes the worker is using.
+	RequestedDeviceClasses []string
+}
+
+// buildRemoteDRASummary extracts a Phase 8 DRA summary from the
+// RTJ status. Returns zero values for any field not present (Phase 7
+// and earlier workers will have all fields empty).
+func buildRemoteDRASummary(job *trainingv1alpha1.ResumableTrainingJob) remoteDRASummary {
+	var summary remoteDRASummary
+	if job.Status.Devices == nil {
+		return summary
+	}
+	ds := job.Status.Devices
+	summary.DeviceMode = string(ds.DeviceMode)
+	summary.DeviceProfileFingerprint = ds.CurrentDeviceProfileFingerprint
+	summary.ClaimAllocationState = string(ds.ClaimAllocationState)
+	summary.AllocatedClaimCount = ds.AllocatedClaimCount
+	summary.RequestedDeviceClasses = ds.RequestedDeviceClasses
+	return summary
+}
+
+// hasPhase8RemoteStatus returns true when the mirrored status contains
+// Phase 8 DRA device status fields from the worker. This indicates the
+// worker is running with Phase 8 DRA features active.
+func hasPhase8RemoteStatus(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return job.Status.Devices != nil &&
+		job.Status.Devices.DeviceMode != "" &&
+		job.Status.Devices.DeviceMode != trainingv1alpha1.DeviceModeDisabled
+}
+
+// -------------------------------------------------------------------------
 // Remote pause / resume helpers
 // -------------------------------------------------------------------------
 //

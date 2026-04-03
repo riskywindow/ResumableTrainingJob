@@ -921,23 +921,123 @@ Exercises the fail-closed device profile compatibility check:
 4. **Multi-cluster DRA e2e** (deferred)
 5. **Device failure recovery e2e** (deferred; unit-tested)
 
+### Recommended next prompt (superseded by Session 8)
+
+See Session 8 below.
+
+---
+
+## Session 8: Multi-cluster DRA compatibility
+
+**Date**: 2026-04-03
+
+### Mission
+
+Make Phase 8 DRA support compatible with the existing Phase 6
+manager/worker multi-cluster path. Ensure DRA helper objects
+(ResourceClaimTemplates, ResourceClaims) are created only on the
+executing worker cluster. Surface remote DRA status on the manager
+for observability. Verify the manager never creates local DRA objects
+for remote RTJs.
+
+### Decisions made
+
+1. **No new MultiClusterStatus fields for DRA.** Rather than adding
+   `RemoteDeviceSummary` to the API (which would require deep copy
+   changes and CRD updates), we rely on the already-mirrored
+   `status.devices` being present on the manager-side RTJ via the
+   Kueue adapter's full-status mirror. Structured logging extracts
+   key DRA fields for operator visibility.
+
+2. **Guard is structural, not conditional.** The manager skips DRA
+   template reconciliation because `ShouldSuppressRuntime()` returns
+   before `reconcileDRATemplates()` in the `Reconcile()` function.
+   This is a code-ordering guarantee, not a conditional check inside
+   `reconcileDRATemplates()`. This prevents accidental DRA object
+   creation if someone reorders the reconcile loop.
+
+3. **`remoteDRASummary` follows the Phase 7 `remoteLaunchSummary`
+   pattern.** Extracts device mode, fingerprint, claim allocation
+   state, allocated count, and device classes from the mirrored
+   worker status. Used for structured logging only, not for
+   decision-making.
+
+4. **`hasPhase8RemoteStatus` detects active DRA.** Returns true when
+   `status.devices` is non-nil with `deviceMode != Disabled`. This
+   distinguishes Phase 8 workers (DRA active) from Phase 7 and
+   earlier workers.
+
+5. **E2e smoke test reuses Phase 6 infrastructure.** The
+   `TestMultiClusterDRASmoke` test uses the Phase 6 three-cluster
+   environment (manager, worker-1, worker-2) with the same bias
+   mechanism (`biasWorkerSelection`) for deterministic dispatch.
+   DRA ResourceClaimTemplate verification is skipped gracefully
+   when the DRA CRD is not present on the worker (infrastructure
+   may not always include the Phase 8 DRA driver).
+
+6. **Single-cluster Phase 8 path preserved.** No changes to the
+   existing Phase 8 single-cluster reconciliation. All modifications
+   are in the manager-mode path and test infrastructure.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| internal/controller/resumabletrainingjob_controller.go | Updated: added Phase 8 multi-cluster compatibility comment to ShouldSuppressRuntime block; added Phase 8 DRA status logging in reconcileManagerIntent |
+| internal/controller/remote_status.go | Updated: added remoteDRASummary struct, buildRemoteDRASummary(), hasPhase8RemoteStatus() |
+| internal/controller/remote_status_test.go | Updated: added 7 Phase 8 DRA tests (3 unit, 4 subtests, 3 integration) |
+| test/e2e/multicluster_dra_smoke_test.go | Created: multi-cluster DRA smoke e2e test with 10 verification steps |
+| test/e2e/testdata/phase8/rtj-dra-multicluster-dispatch.yaml | Created: DRA-backed RTJ fixture for multi-cluster dispatch |
+| docs/phase8/multicluster-compatibility.md | Created: full documentation of Phase 8 multi-cluster DRA compatibility |
+| docs/phase8/session-handoff.md | Updated: Session 8 results |
+
+### Tests run
+
+All tests pass (0 failures, 0 regressions):
+
+**New unit tests (10 total):**
+
+`internal/controller/remote_status_test.go`:
+- `TestBuildRemoteDRASummaryFullState`
+- `TestBuildRemoteDRASummaryEmptyStatus`
+- `TestBuildRemoteDRASummaryPendingClaims`
+- `TestHasPhase8RemoteStatus` (4 subtests: no device status, DRA active, Disabled, empty mode)
+- `TestManagerModeReflectsPhase8WorkerDRAStatus`
+- `TestManagerModePhase7WorkerHasNoPhase8DRAFields`
+- `TestManagerModeDoesNotCreateResourceClaimTemplates`
+
+**New e2e test (1 total):**
+
+`test/e2e/multicluster_dra_smoke_test.go`:
+- `TestMultiClusterDRASmoke` (10 verification steps)
+
+### What remains for Session 9+
+
+1. **Wire `observeDRAClaimStatus()`** into the main Reconcile loop
+   (observation logic exists but is not called during reconciliation)
+2. **Wire `syncDeviceResumeFingerprint()`** into the resume flow
+3. **DRA + ProvisioningRequest interaction** e2e test (OQ9)
+4. **Device failure recovery e2e** (deferred; unit-tested)
+5. **Cross-cluster device profile mismatch e2e** (deferred; covered
+   by single-cluster tests)
+
 ### Recommended next prompt
 
 ```
-You are working on Phase 8 Session 8 for the checkpoint-native preemption
+You are working on Phase 8 Session 9 for the checkpoint-native preemption
 controller repo.
 
-Read docs/phase8/session-handoff.md for context (Sessions 1-7).
+Read docs/phase8/session-handoff.md for context (Sessions 1-8).
 
-Session 7 implemented:
-- 3 single-cluster e2e tests: DRA quota/allocation, compatible resume,
-  incompatible resume rejection
-- Phase 8 test helpers and 5 YAML test fixtures
-- docs/phase8/e2e.md documenting coverage and deferrals
+Session 8 implemented:
+- Multi-cluster DRA compatibility (manager suppression, worker execution)
+- Remote DRA status observability on manager
+- 7 unit tests + 1 e2e smoke test
+- Multi-cluster compatibility documentation
 
 Remaining Phase 8 work:
 1. Wire observeDRAClaimStatus() into the main Reconcile() loop
 2. Wire syncDeviceResumeFingerprint() into resume flow
 3. DRA + ProvisioningRequest interaction e2e test (OQ9)
-4. Multi-cluster DRA e2e (deferred)
+4. Device failure recovery e2e (deferred; unit-tested)
 ```
