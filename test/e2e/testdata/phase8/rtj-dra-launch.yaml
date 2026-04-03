@@ -1,0 +1,91 @@
+# Phase 8 e2e: DRA-backed RTJ launch with Kueue quota accounting.
+#
+# This RTJ requests 2 simulated GPUs per worker via the "example-gpu"
+# DeviceClass. The operator creates a companion ResourceClaimTemplate
+# named "<rtj-name>-gpu" and injects it into the child JobSet.
+#
+# Placeholders:
+#   __RTJ_NAME__         -> unique RTJ name
+#   __TRAINER_IMAGE__    -> trainer container image
+#   __DEV_NAMESPACE__    -> target namespace
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase8-training
+spec:
+  suspend: true
+  queueName: phase8-training
+  control:
+    desiredState: Running
+  devices:
+    mode: DRA
+    claims:
+      - name: gpu
+        containers:
+          - trainer
+        request:
+          deviceClassName: example-gpu
+          count: 2
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: example-gpu-v1
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  metadata:
+                    labels:
+                      app.kubernetes.io/name: rtj-phase8-e2e
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        imagePullPolicy: IfNotPresent
+                        command:
+                          - python
+                          - -m
+                          - torch.distributed.run
+                          - --standalone
+                          - --nnodes=1
+                          - --nproc-per-node=2
+                          - /app/fixtures/pytorch_ddp_counter/train.py
+                          - --max-steps
+                          - "1000"
+                          - --sleep-per-step
+                          - "0.2"
+                        env:
+                          - name: YIELD_SDK_CLUSTER_IDENTITY
+                            value: checkpoint-dev
+                        envFrom:
+                          - secretRef:
+                              name: checkpoint-storage-credentials
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+  checkpoint:
+    storageURI: s3://rtj-checkpoints/__RTJ_NAME__/
+    interval: 15s
+    freshnessBudget: 60s
+    maxDrainTime: 30s
+    safePointMode: StepBoundary
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

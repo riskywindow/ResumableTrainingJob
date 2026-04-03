@@ -805,3 +805,139 @@ Remaining Phase 8 work:
 5. Phase 8 integration e2e tests (DRA launch, pause/resume,
    incompatible profile rejection)
 ```
+
+---
+
+## Session 7: Single-cluster e2e test coverage
+
+**Date**: 2026-04-03
+
+### Goals
+
+Implement deterministic single-cluster e2e coverage for DRA-backed launch,
+DRA-aware quota/accounting, and DRA-aware resume. Three strong e2e tests
+rather than many shallow ones.
+
+### What was implemented
+
+#### 1. E2e test: DRA quota and allocation (`TestDRAQuotaAndAllocation`)
+
+**File**: `test/e2e/dra_quota_and_allocation_test.go`
+
+Exercises the full DRA launch lifecycle:
+- Submits a DRA-backed RTJ requesting 2 GPUs per worker
+- Verifies ResourceClaimTemplates are created with correct ownership and spec
+- Verifies status.devices is populated (fingerprint, template refs)
+- Verifies Workload is created and admitted by Kueue with DRA quota accounting
+- Verifies RTJ transitions to Running after DRA allocation
+- Verifies child JobSet is plain runtime (Phase 2 invariant)
+- Submits a second quota-hog RTJ (4 GPUs per worker = 8 total, exhausting quota)
+- Verifies the second RTJ stays Queued while quota is exhausted
+- Deletes first RTJ to free quota
+- Verifies second RTJ is admitted and reaches Running
+
+#### 2. E2e test: DRA compatible resume (`TestDRAResumeCompatibleProfile`)
+
+**File**: `test/e2e/dra_resume_compatible_profile_test.go`
+
+Exercises the pause/resume cycle with matching device profiles:
+- Submits a DRA-backed RTJ, waits for Running
+- Records device profile fingerprint from status.devices
+- Waits for a checkpoint to be saved
+- Pauses the RTJ (desiredState=Paused)
+- Verifies checkpoint manifest in S3 includes deviceProfileFingerprint
+- Resumes the RTJ (desiredState=Running)
+- Verifies resume succeeds (run attempt 2)
+- Verifies device profile fingerprint is preserved across pause/resume
+- Verifies child JobSet is recreated as plain runtime
+
+#### 3. E2e test: DRA incompatible resume rejection (`TestDRAIncompatibleResumeRejection`)
+
+**File**: `test/e2e/dra_incompatible_resume_rejection_test.go`
+
+Exercises the fail-closed device profile compatibility check:
+- Creates a checkpoint under "example-gpu" device profile
+- Verifies checkpoint manifest has device profile fingerprint
+- Submits a second RTJ with "example-gpu-alt" (different DeviceClass)
+- Verifies fingerprints differ between the two RTJs
+- Verifies the incompatible checkpoint is NOT selected for resume
+- Verifies clear status surfacing (Degraded condition / Failed phase)
+- Documents the comprehensive unit test complement
+
+#### 4. Test infrastructure
+
+- **`test/e2e/phase8_helpers_test.go`**: Phase 8 helpers including
+  `phase8RTJView` with DRA status fields, `setupPhase8Env()` with
+  Phase 8 infrastructure validation, ResourceClaimTemplate/ResourceClaim
+  query helpers, Phase 8 Workload helpers, cleanup functions
+- **`test/e2e/testdata/phase8/`**: 5 YAML fixtures for DRA e2e tests
+
+#### 5. Documentation
+
+- **`docs/phase8/e2e.md`**: Explains what each test proves, test
+  infrastructure requirements, and what remains deferred
+
+### Test data files
+
+| File | Purpose |
+|---|---|
+| test/e2e/testdata/phase8/rtj-dra-launch.yaml | DRA-backed RTJ (2 GPUs, launch test) |
+| test/e2e/testdata/phase8/rtj-dra-quota-hog.yaml | DRA RTJ (4 GPUs/worker, quota exhaustion) |
+| test/e2e/testdata/phase8/rtj-dra-pause-resume.yaml | DRA RTJ (pause/resume with same profile) |
+| test/e2e/testdata/phase8/rtj-dra-incompatible-profile.yaml | DRA RTJ (example-gpu-alt, incompatible) |
+| test/e2e/testdata/phase8/localqueue-hold-phase8.yaml | LocalQueue with hold policy |
+
+### Design decisions
+
+1. **Three strong tests over many shallow ones**: Each test exercises a
+   distinct Phase 8 integration surface end-to-end. The quota test proves
+   the Kueue/DRA accounting pipeline. The resume test proves checkpoint
+   fingerprint preservation. The rejection test proves fail-closed safety.
+
+2. **Shared test helpers pattern**: `phase8_helpers_test.go` follows the
+   established pattern from Phases 3-7 with phase-specific RTJ view
+   structs, environment setup, and polling helpers.
+
+3. **kubectl-based assertions**: All status checks use kubectl JSON
+   output, matching the project's e2e convention. No direct API client
+   imports in e2e tests.
+
+4. **Deterministic via fixture control**: Tests control determinism
+   through queue quotas, unique RTJ names, and polling-based state
+   assertions (not sleep-based).
+
+5. **Quota-hog approach for exhaustion**: Instead of creating many small
+   RTJs, a single hog RTJ requests 4 GPUs per worker (8 total) to
+   exhaust the 8-device quota in one shot. This is deterministic and
+   fast.
+
+### What remains for Session 8+
+
+1. **Wire `observeDRAClaimStatus()`** into the main Reconcile loop
+   (currently the observation logic exists but is not called during
+   reconciliation)
+2. **Wire `syncDeviceResumeFingerprint()`** into the resume flow
+3. **DRA + ProvisioningRequest interaction** e2e test (OQ9)
+4. **Multi-cluster DRA e2e** (deferred)
+5. **Device failure recovery e2e** (deferred; unit-tested)
+
+### Recommended next prompt
+
+```
+You are working on Phase 8 Session 8 for the checkpoint-native preemption
+controller repo.
+
+Read docs/phase8/session-handoff.md for context (Sessions 1-7).
+
+Session 7 implemented:
+- 3 single-cluster e2e tests: DRA quota/allocation, compatible resume,
+  incompatible resume rejection
+- Phase 8 test helpers and 5 YAML test fixtures
+- docs/phase8/e2e.md documenting coverage and deferrals
+
+Remaining Phase 8 work:
+1. Wire observeDRAClaimStatus() into the main Reconcile() loop
+2. Wire syncDeviceResumeFingerprint() into resume flow
+3. DRA + ProvisioningRequest interaction e2e test (OQ9)
+4. Multi-cluster DRA e2e (deferred)
+```
