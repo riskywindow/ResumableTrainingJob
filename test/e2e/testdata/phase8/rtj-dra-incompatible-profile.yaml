@@ -1,0 +1,92 @@
+# Phase 8 e2e: RTJ with incompatible device profile for resume rejection.
+#
+# Uses "example-gpu-alt" DeviceClass to produce a different device profile
+# fingerprint. When resuming from a checkpoint saved with "example-gpu",
+# the operator rejects the checkpoint (fail-closed compatibility check).
+#
+# Placeholders:
+#   __RTJ_NAME__         -> unique RTJ name
+#   __TRAINER_IMAGE__    -> trainer container image
+#   __DEV_NAMESPACE__    -> target namespace
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase8-training
+spec:
+  suspend: true
+  queueName: phase8-training
+  control:
+    desiredState: Running
+  devices:
+    mode: DRA
+    claims:
+      - name: gpu
+        containers:
+          - trainer
+        request:
+          deviceClassName: example-gpu-alt
+          count: 2
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    # gpuShape kept identical so only the device profile differs.
+    gpuShape: example-gpu-v1
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  metadata:
+                    labels:
+                      app.kubernetes.io/name: rtj-phase8-e2e-incompat
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        imagePullPolicy: IfNotPresent
+                        command:
+                          - python
+                          - -m
+                          - torch.distributed.run
+                          - --standalone
+                          - --nnodes=1
+                          - --nproc-per-node=2
+                          - /app/fixtures/pytorch_ddp_counter/train.py
+                          - --max-steps
+                          - "1000"
+                          - --sleep-per-step
+                          - "0.2"
+                        env:
+                          - name: YIELD_SDK_CLUSTER_IDENTITY
+                            value: checkpoint-dev
+                        envFrom:
+                          - secretRef:
+                              name: checkpoint-storage-credentials
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+  checkpoint:
+    storageURI: s3://rtj-checkpoints/__RTJ_NAME__/
+    interval: 15s
+    freshnessBudget: 60s
+    maxDrainTime: 30s
+    safePointMode: StepBoundary
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3
