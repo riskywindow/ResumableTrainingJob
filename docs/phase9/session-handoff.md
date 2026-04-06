@@ -252,47 +252,163 @@ See Session: 2026-04-05 (Runtime Elasticity Protocol) below.
 
 ### Recommended next prompt
 
+See Session: 2026-04-05 (Elastic Planning Model) below.
+
+---
+
+## Session: 2026-04-05 (Elastic Planning Model)
+
+### Decisions made
+
+1. **Elastic planning is a pure-function model**: `EvaluatePlan()` takes a
+   `PlanInput` snapshot and returns a deterministic `PlanOutput`.  No side
+   effects, no Kubernetes client dependencies.
+
+2. **Seven discrete plan kinds**: `NoResize`, `ShrinkInPlace`,
+   `ShrinkViaRelaunch`, `GrowViaRelaunch`, `ResizeBlocked`,
+   `ResizeInProgress`, `ReclaimPublished`.
+
+3. **SSA with dedicated field manager for reclaimablePods**: Field manager
+   `rtj-elastic-reclaim` writes only `reclaimablePods` entries via
+   server-side apply.  This avoids clobbering Kueue-owned status fields
+   (admission, conditions, admissionChecks, requeueState).
+
+4. **SSA chosen over merge-patch**: Eliminates read-modify-write races with
+   Kueue's concurrent status writes.  `reclaimablePods` has `+listType=map`
+   with `+listMapKey=name`, so SSA treats each PodSet entry as independently
+   owned.
+
+5. **Preemption/resize coalesce (OQ-4 resolved)**: When preemption is in
+   progress, the planner returns `ResizeBlocked`.  The resize target is
+   preserved in spec and evaluated after re-admission.
+
+6. **MaxWorkerCount=0 means unbounded**: Consistent with Go zero-value
+   semantics.  Allows grow targets beyond preferred count when upper bound
+   is not explicitly set.
+
+7. **NeedsReclaimUpdate() idempotency guard**: Prevents unnecessary SSA
+   patches when the desired state matches the current Workload state.
+
+8. **Controller integration via buildElasticPlanInput()**: Extracts all
+   plan inputs from RTJ spec, status, and Workload admission state.
+   syncElasticityStatus() writes plan outputs back to status.elasticity.
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `internal/elastic/types.go` | PlanKind enum, PlanInput, PlanOutput, ReclaimDelta types |
+| `internal/elastic/plan.go` | EvaluatePlan() pure function with decision tree |
+| `internal/elastic/plan_test.go` | 22 tests: shrink, grow, no-op, blocked, idempotency |
+| `internal/elastic/reclaim.go` | ComputeReclaimDelta, BuildReclaimablePods, NeedsReclaimUpdate |
+| `internal/elastic/reclaim_test.go` | 13 tests: delta calculation, build, clear, idempotency |
+| `internal/controller/elastic_plan.go` | buildElasticPlanInput, evaluateElasticPlan, syncElasticityStatus |
+| `internal/controller/elastic_plan_test.go` | 17 tests: input building, plan evaluation, status sync |
+| `internal/controller/workload_status_patch.go` | SSA patch for Workload.status.reclaimablePods |
+| `internal/controller/workload_status_patch_test.go` | 10 tests: patch safety, field manager, idempotency |
+| `docs/phase9/elastic-planning.md` | Planning model design document |
+
+### Files changed
+
+| File | Changes |
+|---|---|
+| `docs/phase9/session-handoff.md` | Added this session entry |
+
+### Tests run
+
+- `go test ./internal/elastic/... -v -count=1` — **35 passed** (22 plan + 13 reclaim)
+- `go test ./internal/controller/... -run 'Elastic|SSA|Reclaim|Field|PlanKind|Sync' -v -count=1` — **27 passed** (17 elastic_plan + 10 workload_status_patch)
+- `go test ./internal/... -count=1` — **all pass** (no regressions)
+- `go build ./...` — **clean**
+
+### New Go types
+
+| Type | Package | Kind | Description |
+|---|---|---|---|
+| `PlanKind` | `elastic` | Enum (7 values) | Discrete plan action |
+| `PlanInput` | `elastic` | Struct (16 fields) | Read-only planner input |
+| `PlanOutput` | `elastic` | Struct (7 fields) | Deterministic plan result |
+| `ReclaimDelta` | `elastic` | Struct (2 fields) | reclaimablePods patch descriptor |
+| `ElasticPlanResult` | `controller` | Struct | Controller plan evaluation result |
+| `WorkloadReclaimPatchResult` | `controller` | Struct | SSA patch outcome |
+
+### New functions
+
+| Function | Package | Description |
+|---|---|---|
+| `EvaluatePlan()` | `elastic` | Core pure-function planner |
+| `ComputeReclaimDelta()` | `elastic` | Plan → ReclaimDelta |
+| `BuildReclaimablePods()` | `elastic` | ReclaimDelta → Kueue ReclaimablePod slice |
+| `ClearReclaimablePods()` | `elastic` | Returns nil (clear signal) |
+| `ReclaimDeltaFromExisting()` | `elastic` | Extract delta from existing Workload |
+| `NeedsReclaimUpdate()` | `elastic` | Idempotency guard |
+| `buildElasticPlanInput()` | `controller` | RTJ → PlanInput |
+| `evaluateElasticPlan()` | `controller` | RTJ × Workload state → ElasticPlanResult |
+| `syncElasticityStatus()` | `controller` | PlanOutput → status.elasticity fields |
+| `patchWorkloadReclaimablePods()` | `controller` | SSA patch reclaimablePods |
+| `clearWorkloadReclaimablePods()` | `controller` | Convenience clear wrapper |
+| `buildReclaimablePodsSSAPatch()` | `controller` | JSON SSA patch builder |
+| `planKindToResizeState()` | `controller` | PlanKind → ResizeState mapping |
+| `planKindToResizePath()` | `controller` | PlanKind → ResizePath mapping |
+
+### Open questions resolved
+
+| OQ | Resolution |
+|---|---|
+| OQ-4 (Preemption/resize race) | **Resolved**: Planner returns ResizeBlocked when preemption is in progress. Target preserved in spec, evaluated after re-admission. |
+
+### What was NOT done (deliberately)
+
+- **No reconcile loop wiring**: The planning model and patch strategy are
+  implemented but not yet called from the main Reconcile() method.
+  Wiring in the elastic plan evaluation and reclaimablePods lifecycle is
+  the next step.
+- **No JobSet replica patching**: The in-place shrink execution (patch
+  child JobSet replicas) is not yet implemented.
+- **No checkpoint-and-relaunch orchestration**: The C&R execution path
+  (pause → checkpoint → suspend Workload → mutate PodSets → re-admit →
+  relaunch) is not yet implemented.
+- **No environment variable injection**: YIELD_SDK_* env vars are not
+  yet injected into JobSet pod templates.
+- **No state machine transitions**: The resize state machine (Pending →
+  InProgress → Completed/Failed) is not yet wired.
+
+### Recommended next prompt
+
 ```
 You are working on Phase 9 only for the checkpoint-native preemption controller repo.
 
-Mission: Implement Phase 9 resize controller logic.
+Mission: Wire the elastic planning model into the main reconcile loop and
+implement the in-place shrink execution path.
 
-Read docs/phase9/index.md, docs/phase9/architecture.md, docs/phase9/api.md,
-docs/phase9/runtime-elasticity.md, and docs/phase9/open-questions.md.
+Read docs/phase9/elastic-planning.md for the planning model design.
+Read internal/elastic/plan.go and internal/controller/elastic_plan.go
+for the current implementation.
 
-Step 1: Add the resize decision logic to the controller
-(internal/controller/resumabletrainingjob_controller.go):
-- Detect targetWorkerCount delta from spec.elasticity vs status.elasticity.
-- Choose resize path (in-place shrink vs. checkpoint-and-relaunch).
-- Implement in-place shrink: patch JobSet replicas, write reclaimablePods to
-  Workload.status, update status.elasticity.
-- Implement checkpoint-and-relaunch: pause → checkpoint → suspend Workload →
-  mutate PodSets → re-admit → relaunch.
+Step 1: Wire evaluateElasticPlan() into the main Reconcile() method:
+- Call evaluateElasticPlan() when the RTJ is Running and has an active JobSet.
+- Gate on elasticity being enabled.
+- Persist status changes from syncElasticityStatus().
 
-Step 2: Wire reclaimablePods lifecycle:
-- Write reclaimablePods entry after patching JobSet replicas down.
-- Wait for surplus pods to terminate.
-- Clear reclaimablePods once resize is confirmed complete.
+Step 2: Implement in-place shrink execution:
+- When plan.Kind == ShrinkInPlace: patch child JobSet replicas to target.
+- After replica patch: call patchWorkloadReclaimablePods() with the reclaim delta.
+- Set status.elasticity.reclaimablePodsPublished = true.
+- Transition resizeState to InProgress.
 
-Step 3: Inject YIELD_SDK_ELASTICITY_MODE, YIELD_SDK_TARGET_WORKER_COUNT,
-YIELD_SDK_SUPPORTS_IN_PLACE_SHRINK, and YIELD_SDK_RESIZE_SIGNAL_DIR into
-the JobSet pod template env when elasticity is enabled.
+Step 3: Implement reclaim completion detection:
+- When ReclaimPublished: check if surplus pods have terminated.
+- Once pods terminated: call clearWorkloadReclaimablePods().
+- Clear reclaimablePodsPublished and transition to Completed.
 
-Step 4: Write unit tests for:
-- Resize path decision logic (in-place vs C&R, shrink vs grow).
-- reclaimablePods write/clear lifecycle.
-- Checkpoint-and-relaunch state transitions.
-- Elasticity disabled ≡ Phase 8 behavior.
-- Target within/outside bounds.
-- Preemption/resize race handling (OQ-4).
+Step 4: Inject YIELD_SDK_* environment variables into JobSet pod templates
+when elasticity is enabled.
 
-Step 5: Update docs/phase9/session-handoff.md.
+Step 5: Write integration tests for the full resize lifecycle.
 
 Hard boundaries:
+- Do NOT implement checkpoint-and-relaunch execution yet (separate session).
+- Do NOT mutate Workload PodSet specs (that's the C&R path).
+- Do NOT add automatic autoscaling.
 - Preserve Phase 8 behavior when elasticity is disabled.
-- Do NOT add native Kueue Workload Slices as core path.
-- Do NOT add automatic metric-driven autoscaling.
-- Do NOT break MultiKueue manager/worker ownership.
-- Use the existing spec.elasticity and status.elasticity API surface.
-- Use the existing runtime-side protocol from sdk/python/yield_sdk/elastic.py.
 ```
