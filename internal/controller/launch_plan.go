@@ -151,6 +151,11 @@ func (plan *LaunchPlan) toRenderInput(
 	// Phase 8: populate DRA claim injections from RTJ spec + status.
 	input.DRAClaims = rtjjobset.BuildDRAClaimInjections(job)
 
+	// Phase 9: inject elastic target worker count when elasticity is enabled.
+	if job.IsElasticityEnabled() && job.Spec.Elasticity.TargetWorkerCount != nil {
+		input.ElasticTargetWorkerCount = *job.Spec.Elasticity.TargetWorkerCount
+	}
+
 	return input
 }
 

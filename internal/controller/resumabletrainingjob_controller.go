@@ -185,6 +185,13 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 			r.Metrics.IncResumeSucceeded()
 		}
 
+		// Phase 9: if a resize-triggered relaunch just completed (the RTJ
+		// transitioned from Restoring to Running while a resize was in
+		// progress), mark the resize as completed and clear conditions.
+		if wasRestoring && isResizeTriggeredStop(&job) {
+			statusChanged = completeResizeAfterRelaunch(&job, now) || statusChanged
+		}
+
 		// Phase 5: evaluate priority shaping when the job is in an active phase.
 		var priorityRequeue time.Duration
 		if isActivePriorityPhase(job.Status.Phase) && job.IsPriorityShapingEnabled() {
@@ -196,6 +203,40 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 				}
 			}
 			priorityRequeue = psResult.RequeueAfter
+		}
+
+		// Phase 9: evaluate elastic plan and execute resize when the RTJ
+		// is running. The plan is evaluated on every reconcile to pick up
+		// spec.elasticity.targetWorkerCount changes. Execution is
+		// idempotent: repeated reconciles do not duplicate actions.
+		if job.IsElasticityEnabled() {
+			workload, wlErr := r.findWorkloadForRTJ(ctx, &job)
+			if wlErr != nil {
+				logger.Error(wlErr, "failed to find workload for elastic plan")
+			} else {
+				workloadAdmitted := workload != nil && workload.Status.Admission != nil
+				workloadExists := workload != nil
+				planResult := evaluateElasticPlan(ctx, &job, workloadAdmitted, workloadExists, now)
+				statusChanged = planResult.StatusChanged || statusChanged
+
+				execResult, execErr := r.executeElasticPlan(ctx, &job, planResult.Plan, now)
+				if execErr != nil {
+					logger.Error(execErr, "elastic plan execution failed")
+				}
+				statusChanged = execResult.StatusChanged || statusChanged
+
+				// If the plan requires a checkpoint-and-relaunch, trigger the
+				// stop flow. The RTJ will drain, checkpoint, and re-enter
+				// the launch path with the new target worker count.
+				if execResult.TriggerStopFlow {
+					if statusChanged {
+						if err := r.Status().Update(ctx, &job); err != nil {
+							return ctrl.Result{}, err
+						}
+					}
+					return r.reconcileResizeStopFlow(ctx, &job, activeJobSet, now)
+				}
+			}
 		}
 
 		if statusChanged {

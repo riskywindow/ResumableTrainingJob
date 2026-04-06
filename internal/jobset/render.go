@@ -52,6 +52,11 @@ type RenderInput struct {
 	// injections (topology, podSetUpdates). Each entry maps to one
 	// DeviceClaimSpec from the RTJ with its resolved template name.
 	DRAClaims []DRAClaimInjection
+
+	// Phase 9: elastic target worker count. When > 0, the
+	// YIELD_SDK_TARGET_WORKER_COUNT env var is injected into all containers
+	// so the runtime can observe the desired worker count for resize coordination.
+	ElasticTargetWorkerCount int32
 }
 
 func RenderChildJobSet(input RenderInput) (*Object, error) {
@@ -131,6 +136,11 @@ func RenderChildJobSet(input RenderInput) (*Object, error) {
 			upsertEnv(container, EnvClusterIdentity, DefaultClusterIdentity)
 			if input.ResumeManifestURI != "" {
 				upsertEnv(container, EnvRestoreManifestURI, input.ResumeManifestURI)
+			}
+
+			// Phase 9: inject elastic target worker count when set.
+			if input.ElasticTargetWorkerCount > 0 {
+				upsertEnv(container, EnvTargetWorkerCount, strconv.Itoa(int(input.ElasticTargetWorkerCount)))
 			}
 
 			// Phase 3: inject world-size and flavor env vars when admission is active.

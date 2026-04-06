@@ -39,6 +39,11 @@ type LaunchGateResult struct {
 	// Populated when a Workload is found. Nil when no Workload exists
 	// (Phase 3/6 backward-compatible path).
 	LaunchView *provisioning.LaunchReadinessView
+
+	// Phase 9: ResizeRelaunch is true when the current launch/resume is
+	// triggered by a resize checkpoint-and-relaunch flow. Used by the
+	// reconciler to set the RelaunchingForResize condition.
+	ResizeRelaunch bool
 }
 
 const (
@@ -201,6 +206,10 @@ func (r *ResumableTrainingJobReconciler) evaluateLaunchGates(
 	result.Ready = true
 	result.Reason = reasonLaunchReady
 	result.Message = "All launch gates satisfied."
+
+	// Phase 9: detect if this launch is a resize-triggered relaunch.
+	result.ResizeRelaunch = isResizeTriggeredStop(job)
+
 	return result, nil
 }
 
