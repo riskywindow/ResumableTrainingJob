@@ -769,6 +769,99 @@ func TestRenderChildJobSetDRAWithTopologyCoexist(t *testing.T) {
 	}
 }
 
+// --- Phase 9 Elastic Render Tests ---
+
+func TestRenderChildJobSetInjectsElasticTargetWorkerCount(t *testing.T) {
+	rtj := testRTJ()
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                      rtj,
+		RunAttempt:               1,
+		JobSetName:               "counter-run-1",
+		ControlConfigMapName:     "counter-run-1-control",
+		ElasticTargetWorkerCount: 4,
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	container := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec.Containers[0]
+	assertEnvValue(t, container.Env, EnvTargetWorkerCount, "4")
+}
+
+func TestRenderChildJobSetOmitsElasticTargetWhenZero(t *testing.T) {
+	rtj := testRTJ()
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                      rtj,
+		RunAttempt:               1,
+		JobSetName:               "counter-run-1",
+		ControlConfigMapName:     "counter-run-1-control",
+		ElasticTargetWorkerCount: 0,
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	container := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec.Containers[0]
+	assertEnvNotPresent(t, container.Env, EnvTargetWorkerCount)
+}
+
+func TestRenderChildJobSetElasticTargetCoexistsWithDRA(t *testing.T) {
+	rtj := testRTJ()
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                      rtj,
+		RunAttempt:               1,
+		JobSetName:               "counter-run-1",
+		ControlConfigMapName:     "counter-run-1-control",
+		ElasticTargetWorkerCount: 6,
+		DRAClaims: []DRAClaimInjection{
+			{ClaimName: "gpu", TemplateName: "counter-gpu", Containers: []string{"trainer"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	container := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec.Containers[0]
+	assertEnvValue(t, container.Env, EnvTargetWorkerCount, "6")
+
+	// DRA claims should also be present.
+	pod := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec
+	if len(pod.ResourceClaims) != 1 {
+		t.Fatalf("expected DRA claims alongside elastic target, got %d", len(pod.ResourceClaims))
+	}
+}
+
+func TestRenderChildJobSetElasticTargetCoexistsWithAdmission(t *testing.T) {
+	rtj := testRTJMultiReplica()
+
+	rendered, err := RenderChildJobSet(RenderInput{
+		RTJ:                      rtj,
+		RunAttempt:               1,
+		JobSetName:               "counter-run-1",
+		ControlConfigMapName:     "counter-run-1-control",
+		AdmittedCounts:           map[string]int32{"trainer": 4},
+		OriginalWorldSize:        2,
+		ElasticTargetWorkerCount: 6,
+	})
+	if err != nil {
+		t.Fatalf("render child JobSet: %v", err)
+	}
+
+	container := rendered.Spec.ReplicatedJobs[0].Template.Spec.Template.Spec.Containers[0]
+	// Both elastic target and world size should be present.
+	assertEnvValue(t, container.Env, EnvTargetWorkerCount, "6")
+	assertEnvValue(t, container.Env, EnvWorldSize, "4")
+
+	// Admitted count should be applied.
+	rj := rendered.Spec.ReplicatedJobs[0]
+	if rj.Replicas == nil || *rj.Replicas != 4 {
+		t.Fatalf("expected 4 replicas from admitted count, got %v", rj.Replicas)
+	}
+}
+
 func testRTJ() *trainingv1alpha1.ResumableTrainingJob {
 	rtj := &trainingv1alpha1.ResumableTrainingJob{
 		ObjectMeta: metav1.ObjectMeta{

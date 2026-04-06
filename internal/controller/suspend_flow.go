@@ -25,6 +25,7 @@ type stopSource string
 const (
 	stopSourceManual stopSource = "manual"
 	stopSourceKueue  stopSource = "kueue"
+	stopSourceResize stopSource = "resize"
 )
 
 func (r *ResumableTrainingJobReconciler) now() metav1.Time {
@@ -213,10 +214,27 @@ func (r *ResumableTrainingJobReconciler) ensureStopRequested(
 }
 
 func stopRequestPrefix(source stopSource) string {
-	if source == stopSourceKueue {
+	switch source {
+	case stopSourceKueue:
 		return "kueue-suspend"
+	case stopSourceResize:
+		return "resize"
+	default:
+		return "pause"
 	}
-	return "pause"
+}
+
+// reconcileResizeStopFlow initiates the stop flow for a checkpoint-and-relaunch
+// resize. It reuses the existing stop flow machinery with a resize-specific
+// stop source so that status and conditions can differentiate resize-triggered
+// drains from user pauses and Kueue preemptions.
+func (r *ResumableTrainingJobReconciler) reconcileResizeStopFlow(
+	ctx context.Context,
+	job *trainingv1alpha1.ResumableTrainingJob,
+	activeJobSet *unstructured.Unstructured,
+	now metav1.Time,
+) (ctrl.Result, error) {
+	return r.reconcileStopFlow(ctx, job, activeJobSet, stopSourceResize, now)
 }
 
 func (r *ResumableTrainingJobReconciler) writePauseControl(

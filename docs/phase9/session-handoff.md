@@ -375,40 +375,142 @@ See Session: 2026-04-05 (Elastic Planning Model) below.
 
 ### Recommended next prompt
 
+See Session: 2026-04-05 (Resize Execution) below.
+
+---
+
+## Session: 2026-04-05 (Resize Execution)
+
+### Decisions made
+
+1. **Resize execution is integrated into the main reconcile loop**: When an
+   RTJ is Running with an active JobSet and elasticity is enabled, the
+   controller evaluates the elastic plan and executes the appropriate
+   resize action on every reconcile.
+
+2. **In-place shrink executes via SSA reclaimablePods patch**: The execution
+   engine computes the reclaim delta, builds the Kueue ReclaimablePod slice,
+   applies the SSA patch, and marks `reclaimablePodsPublished=true`. The
+   RTJ remains Running and the Workload remains admitted.
+
+3. **Grow and shrink-fallback use checkpoint-and-relaunch**: The execution
+   engine marks `resizeState=InProgress`, sets the `ResizeCheckpointing`
+   condition, and signals `TriggerStopFlow`. The main reconciler enters
+   the existing drain flow using `stopSourceResize` as the stop source.
+
+4. **Resize stop source is a new stop source variant**: `stopSourceResize`
+   uses the existing `reconcileStopFlow()` machinery, keeping the drain,
+   checkpoint, and cleanup flow identical to manual pause and Kueue
+   preemption flows.
+
+5. **Resize completion is detected on relaunch**: When the RTJ transitions
+   from Restoring to Running and `isResizeTriggeredStop()` is true,
+   `completeResizeAfterRelaunch()` sets `resizeState=Completed` and clears
+   all execution conditions.
+
+6. **Seven resize conditions with mutual exclusion**: Exactly one resize
+   condition is active at a time, progressing through: ResizePending ->
+   ShrinkingInPlace/ShrinkReclaimPublished or ResizeCheckpointing ->
+   RelaunchingForResize -> (cleared on completion).
+
+7. **YIELD_SDK_TARGET_WORKER_COUNT env var injected**: The render path
+   injects the elastic target worker count into all containers via the
+   new `ElasticTargetWorkerCount` field on `RenderInput`.
+
+8. **Launch gate result carries resize context**: `LaunchGateResult.ResizeRelaunch`
+   is set when the launch is triggered by a resize flow, enabling the
+   `RelaunchingForResize` condition on the launch/resume path.
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `internal/controller/elastic_execute.go` | Core resize execution engine: executeElasticPlan(), executeShrinkInPlace(), executeRelaunchResize(), clearStaleResizeState(), isResizeTriggeredStop(), completeResizeAfterRelaunch(), markResizeRelaunchingCondition() |
+| `internal/controller/elastic_execute_test.go` | 25+ tests: condition lifecycle, shrink/grow execution, DRA coherency, idempotency, fallback |
+| `docs/phase9/resize-execution.md` | Design document for resize execution |
+
+### Files changed
+
+| File | Changes |
+|---|---|
+| `internal/controller/resumabletrainingjob_controller.go` | Integrated elastic plan evaluation and execution into the active-JobSet reconcile path; added resize completion detection on relaunch |
+| `internal/controller/status_helpers.go` | Added 7 resize condition types, 13 resize reason constants, condition setter/clearer helpers, syncResizeConditions(), clearAllResizeConditions() |
+| `internal/controller/launch_gate.go` | Added ResizeRelaunch flag to LaunchGateResult; detect resize relaunch in evaluateLaunchGates() |
+| `internal/controller/launch_plan.go` | Inject ElasticTargetWorkerCount into RenderInput |
+| `internal/controller/resume_flow.go` | Set RelaunchingForResize condition on resize-triggered launches/resumes; inject ElasticTargetWorkerCount in non-plan render path |
+| `internal/controller/suspend_flow.go` | Added stopSourceResize; added reconcileResizeStopFlow() |
+| `internal/jobset/render.go` | Added ElasticTargetWorkerCount to RenderInput; inject YIELD_SDK_TARGET_WORKER_COUNT env var |
+| `internal/jobset/names.go` | Added EnvTargetWorkerCount constant |
+| `internal/jobset/render_test.go` | Added 4 Phase 9 render tests: target injection, zero omission, DRA coexistence, admission coexistence |
+| `docs/phase9/session-handoff.md` | Added this session entry |
+
+### Tests run
+
+- `go test ./...` — **all pass** (no regressions across all packages)
+- `go build ./...` — **clean**
+
+### New functions
+
+| Function | Package | Description |
+|---|---|---|
+| `executeElasticPlan()` | `controller` | Main resize execution dispatcher |
+| `executeShrinkInPlace()` | `controller` | In-place shrink: SSA patch + status update |
+| `executeRelaunchResize()` | `controller` | Checkpoint-and-relaunch: mark state + trigger stop |
+| `clearStaleResizeState()` | `controller` | Clear leftover resize state on NoResize |
+| `isResizeTriggeredStop()` | `controller` | Detect resize-triggered drain |
+| `completeResizeAfterRelaunch()` | `controller` | Mark resize completed after relaunch |
+| `markResizeRelaunchingCondition()` | `controller` | Transition from checkpointing to relaunching |
+| `reconcileResizeStopFlow()` | `controller` | Resize-specific stop flow entry point |
+| `syncResizeConditions()` | `controller` | Set/clear conditions based on plan kind |
+| `clearAllResizeConditions()` | `controller` | Clear all 7 resize conditions |
+
+### New condition types
+
+| Condition | Description |
+|---|---|
+| `ResizePending` | Resize planned but not yet started |
+| `ShrinkingInPlace` | In-place shrink executing |
+| `ShrinkReclaimPublished` | reclaimablePods written to Workload |
+| `ResizeCheckpointing` | Drain flow active for resize |
+| `RelaunchingForResize` | Post-drain relaunch in progress |
+| `ResizeBlocked` | Resize cannot proceed |
+| `ResizeFailed` | Execution error |
+
+### What was NOT done (deliberately)
+
+- **No child JobSet replica patching**: In-place shrink uses reclaimablePods
+  only. Direct replica mutation on the child JobSet is not needed because
+  Kueue interprets reclaimablePods and the runtime handles worker removal.
+- **No automatic reclaim completion detection**: The controller does not yet
+  detect when surplus pods have terminated to clear reclaimablePods. This
+  requires observing pod counts on the active JobSet.
+- **No Workload PodSet spec mutation**: The grow path uses the existing
+  suspend/re-admit cycle (new Workload for new admission), not in-flight
+  Workload spec mutation.
+
+### Recommended next prompt
+
 ```
 You are working on Phase 9 only for the checkpoint-native preemption controller repo.
 
-Mission: Wire the elastic planning model into the main reconcile loop and
-implement the in-place shrink execution path.
+Mission: Implement reclaim completion detection and resize lifecycle finalization.
 
-Read docs/phase9/elastic-planning.md for the planning model design.
-Read internal/elastic/plan.go and internal/controller/elastic_plan.go
-for the current implementation.
+Read docs/phase9/resize-execution.md for the execution model.
+Read internal/controller/elastic_execute.go for the current implementation.
 
-Step 1: Wire evaluateElasticPlan() into the main Reconcile() method:
-- Call evaluateElasticPlan() when the RTJ is Running and has an active JobSet.
-- Gate on elasticity being enabled.
-- Persist status changes from syncElasticityStatus().
+Step 1: Detect in-place shrink completion:
+- When the RTJ is Running and ReclaimPublished, observe the active JobSet's
+  worker pod count.
+- When the active pod count matches the target worker count, clear
+  reclaimablePods on the Workload and mark the resize as Completed.
 
-Step 2: Implement in-place shrink execution:
-- When plan.Kind == ShrinkInPlace: patch child JobSet replicas to target.
-- After replica patch: call patchWorkloadReclaimablePods() with the reclaim delta.
-- Set status.elasticity.reclaimablePodsPublished = true.
-- Transition resizeState to InProgress.
+Step 2: Add elapsed time tracking for resize operations:
+- Track resize start time and completion time.
+- Add metrics for resize duration.
 
-Step 3: Implement reclaim completion detection:
-- When ReclaimPublished: check if surplus pods have terminated.
-- Once pods terminated: call clearWorkloadReclaimablePods().
-- Clear reclaimablePodsPublished and transition to Completed.
+Step 3: Handle resize target changes during in-progress operations:
+- If the user changes targetWorkerCount while a resize is in progress,
+  determine whether to abort-and-restart or queue the new target.
 
-Step 4: Inject YIELD_SDK_* environment variables into JobSet pod templates
-when elasticity is enabled.
-
-Step 5: Write integration tests for the full resize lifecycle.
-
-Hard boundaries:
-- Do NOT implement checkpoint-and-relaunch execution yet (separate session).
-- Do NOT mutate Workload PodSet specs (that's the C&R path).
-- Do NOT add automatic autoscaling.
-- Preserve Phase 8 behavior when elasticity is disabled.
+Step 4: E2E resize scenario tests with the DDP fixture.
 ```

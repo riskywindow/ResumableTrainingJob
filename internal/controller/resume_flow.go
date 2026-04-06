@@ -201,6 +201,10 @@ func (r *ResumableTrainingJobReconciler) createRunAttemptResources(
 	}
 	// Phase 8: populate DRA claim injections from RTJ spec + status.
 	renderInput.DRAClaims = rtjjobset.BuildDRAClaimInjections(job)
+	// Phase 9: inject elastic target worker count when elasticity is enabled.
+	if job.IsElasticityEnabled() && job.Spec.Elasticity.TargetWorkerCount != nil {
+		renderInput.ElasticTargetWorkerCount = *job.Spec.Elasticity.TargetWorkerCount
+	}
 	renderedJobSet, err := rtjjobset.RenderChildJobSetUnstructured(renderInput)
 	if err != nil {
 		return "", "", fmt.Errorf("render child JobSet: %w", err)
@@ -295,6 +299,15 @@ func (r *ResumableTrainingJobReconciler) reconcileLaunchWithGate(
 	// Phase 7: sync startup recovery state to Starting.
 	changed = syncStartupRecoveryOnLaunch(job, now) || changed
 
+	// Phase 9: set RelaunchingForResize condition when this is a resize relaunch.
+	if gateResult.ResizeRelaunch {
+		targetWorkers := int32(0)
+		if job.Status.Elasticity != nil {
+			targetWorkers = job.Status.Elasticity.TargetWorkerCount
+		}
+		changed = markResizeRelaunchingCondition(job, targetWorkers, now) || changed
+	}
+
 	// Sync Phase 3/4 status fields.
 	if plan.AdmittedCounts != nil {
 		changed = syncAdmissionStatus(job, plan.WorkerCount, job.EffectivePreferredCount(), plan.AdmittedFlavors) || changed
@@ -370,6 +383,15 @@ func (r *ResumableTrainingJobReconciler) reconcileResumeWithGate(
 	changed := markRestoring(job, runAttempt, controlConfigMapName, childJobSetName, selectedCheckpoint, now)
 	// Phase 7: sync startup recovery state to Starting (restore is a kind of startup).
 	changed = syncStartupRecoveryOnLaunch(job, now) || changed
+
+	// Phase 9: set RelaunchingForResize condition when this is a resize relaunch.
+	if gateResult.ResizeRelaunch {
+		targetWorkers := int32(0)
+		if job.Status.Elasticity != nil {
+			targetWorkers = job.Status.Elasticity.TargetWorkerCount
+		}
+		changed = markResizeRelaunchingCondition(job, targetWorkers, now) || changed
+	}
 
 	// Phase 3/4: sync status fields.
 	if selectedCheckpoint.WorldSize > 0 {

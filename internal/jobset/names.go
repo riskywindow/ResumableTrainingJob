@@ -35,6 +35,7 @@ const (
 	EnvOriginalWorldSize     = "YIELD_SDK_ORIGINAL_WORLD_SIZE"
 	EnvAllowWorldSizeChange  = "YIELD_SDK_ALLOW_WORLD_SIZE_CHANGE"
 	EnvAdmittedFlavor        = "YIELD_SDK_ADMITTED_FLAVOR"
+	EnvTargetWorkerCount     = "YIELD_SDK_TARGET_WORKER_COUNT"
 	DefaultClusterIdentity   = "phase1-kind"
 	ManagedByLabelValue      = "resumabletrainingjob-controller"
 	AdmittedPodSetsAnnotation = "training.checkpoint.example.io/admitted-pod-sets"

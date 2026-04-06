@@ -31,6 +31,30 @@ const (
 
 	conditionTypeDegraded       = "Degraded"
 	conditionTypeKueueSuspended = "KueueSuspended"
+
+	// Phase 9: Resize execution condition types.
+	conditionTypeResizePending            = "ResizePending"
+	conditionTypeShrinkingInPlace         = "ShrinkingInPlace"
+	conditionTypeShrinkReclaimPublished   = "ShrinkReclaimPublished"
+	conditionTypeResizeCheckpointing      = "ResizeCheckpointing"
+	conditionTypeRelaunchingForResize     = "RelaunchingForResize"
+	conditionTypeResizeBlocked            = "ResizeBlocked"
+	conditionTypeResizeFailed             = "ResizeFailed"
+
+	// Phase 9: Resize execution reasons.
+	reasonResizePendingShrinkInPlace     = "ShrinkInPlacePending"
+	reasonResizePendingShrinkRelaunch    = "ShrinkViaRelaunchPending"
+	reasonResizePendingGrowRelaunch      = "GrowViaRelaunchPending"
+	reasonShrinkInPlaceExecuting         = "ShrinkInPlaceExecuting"
+	reasonShrinkReclaimPublished         = "ShrinkReclaimPublished"
+	reasonResizeCheckpointing            = "ResizeCheckpointing"
+	reasonRelaunchingForResize           = "RelaunchingForResize"
+	reasonResizeBlockedByWorkload        = "ResizeBlockedByWorkload"
+	reasonResizeBlockedByPreemption      = "ResizeBlockedByPreemption"
+	reasonResizeBlockedByBounds          = "ResizeBlockedByBounds"
+	reasonResizeBlockedByDRA             = "ResizeBlockedByDRA"
+	reasonResizeFailed                   = "ResizeFailed"
+	reasonResizeCompleted                = "ResizeCompleted"
 )
 
 func markPendingPaused(job *trainingv1alpha1.ResumableTrainingJob, now metav1.Time) bool {
@@ -1098,4 +1122,194 @@ func claimTemplateRefsEqual(a, b []trainingv1alpha1.ResourceClaimTemplateReferen
 		}
 	}
 	return true
+}
+
+// --- Phase 9: Resize execution condition helpers ---
+
+// setResizePendingCondition sets the ResizePending condition based on plan kind.
+func setResizePendingCondition(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	reason, message string,
+	now metav1.Time,
+) bool {
+	return setCondition(job, conditionTypeResizePending, metav1.ConditionTrue, reason, message, now)
+}
+
+// clearResizePendingCondition removes the ResizePending condition.
+func clearResizePendingCondition(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return clearCondition(job, conditionTypeResizePending)
+}
+
+// setShrinkingInPlaceCondition marks the RTJ as executing an in-place shrink.
+func setShrinkingInPlaceCondition(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	message string,
+	now metav1.Time,
+) bool {
+	return setCondition(job, conditionTypeShrinkingInPlace, metav1.ConditionTrue, reasonShrinkInPlaceExecuting, message, now)
+}
+
+// clearShrinkingInPlaceCondition removes the ShrinkingInPlace condition.
+func clearShrinkingInPlaceCondition(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return clearCondition(job, conditionTypeShrinkingInPlace)
+}
+
+// setShrinkReclaimPublishedCondition marks that reclaimablePods have been written.
+func setShrinkReclaimPublishedCondition(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	message string,
+	now metav1.Time,
+) bool {
+	return setCondition(job, conditionTypeShrinkReclaimPublished, metav1.ConditionTrue, reasonShrinkReclaimPublished, message, now)
+}
+
+// clearShrinkReclaimPublishedCondition removes the ShrinkReclaimPublished condition.
+func clearShrinkReclaimPublishedCondition(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return clearCondition(job, conditionTypeShrinkReclaimPublished)
+}
+
+// setResizeCheckpointingCondition marks the RTJ as checkpointing for resize.
+func setResizeCheckpointingCondition(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	message string,
+	now metav1.Time,
+) bool {
+	return setCondition(job, conditionTypeResizeCheckpointing, metav1.ConditionTrue, reasonResizeCheckpointing, message, now)
+}
+
+// clearResizeCheckpointingCondition removes the ResizeCheckpointing condition.
+func clearResizeCheckpointingCondition(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return clearCondition(job, conditionTypeResizeCheckpointing)
+}
+
+// setRelaunchingForResizeCondition marks the RTJ as relaunching at the new size.
+func setRelaunchingForResizeCondition(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	message string,
+	now metav1.Time,
+) bool {
+	return setCondition(job, conditionTypeRelaunchingForResize, metav1.ConditionTrue, reasonRelaunchingForResize, message, now)
+}
+
+// clearRelaunchingForResizeCondition removes the RelaunchingForResize condition.
+func clearRelaunchingForResizeCondition(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return clearCondition(job, conditionTypeRelaunchingForResize)
+}
+
+// setResizeBlockedCondition marks the RTJ's resize as blocked.
+func setResizeBlockedCondition(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	reason, message string,
+	now metav1.Time,
+) bool {
+	return setCondition(job, conditionTypeResizeBlocked, metav1.ConditionTrue, reason, message, now)
+}
+
+// clearResizeBlockedCondition removes the ResizeBlocked condition.
+func clearResizeBlockedCondition(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return clearCondition(job, conditionTypeResizeBlocked)
+}
+
+// setResizeFailedCondition marks the resize as failed.
+func setResizeFailedCondition(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	message string,
+	now metav1.Time,
+) bool {
+	return setCondition(job, conditionTypeResizeFailed, metav1.ConditionTrue, reasonResizeFailed, message, now)
+}
+
+// clearResizeFailedCondition removes the ResizeFailed condition.
+func clearResizeFailedCondition(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return clearCondition(job, conditionTypeResizeFailed)
+}
+
+// clearAllResizeConditions clears all Phase 9 resize-related conditions.
+// Used when elasticity is disabled or resize completes.
+func clearAllResizeConditions(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	changed := clearResizePendingCondition(job)
+	changed = clearShrinkingInPlaceCondition(job) || changed
+	changed = clearShrinkReclaimPublishedCondition(job) || changed
+	changed = clearResizeCheckpointingCondition(job) || changed
+	changed = clearRelaunchingForResizeCondition(job) || changed
+	changed = clearResizeBlockedCondition(job) || changed
+	changed = clearResizeFailedCondition(job) || changed
+	return changed
+}
+
+// syncResizeConditions sets the appropriate resize condition based on the
+// plan kind and clears all other resize conditions to maintain exactly one
+// active resize condition.
+func syncResizeConditions(
+	job *trainingv1alpha1.ResumableTrainingJob,
+	planKind string,
+	planReason, planMessage string,
+	now metav1.Time,
+) bool {
+	changed := false
+
+	switch planKind {
+	case "NoResize":
+		changed = clearAllResizeConditions(job)
+
+	case "ShrinkInPlace":
+		changed = setResizePendingCondition(job, reasonResizePendingShrinkInPlace,
+			planMessage, now)
+		changed = clearShrinkingInPlaceCondition(job) || changed
+		changed = clearShrinkReclaimPublishedCondition(job) || changed
+		changed = clearResizeCheckpointingCondition(job) || changed
+		changed = clearRelaunchingForResizeCondition(job) || changed
+		changed = clearResizeBlockedCondition(job) || changed
+		changed = clearResizeFailedCondition(job) || changed
+
+	case "ShrinkViaRelaunch":
+		changed = setResizePendingCondition(job, reasonResizePendingShrinkRelaunch,
+			planMessage, now)
+		changed = clearShrinkingInPlaceCondition(job) || changed
+		changed = clearShrinkReclaimPublishedCondition(job) || changed
+		changed = clearResizeBlockedCondition(job) || changed
+		changed = clearResizeFailedCondition(job) || changed
+
+	case "GrowViaRelaunch":
+		changed = setResizePendingCondition(job, reasonResizePendingGrowRelaunch,
+			planMessage, now)
+		changed = clearShrinkingInPlaceCondition(job) || changed
+		changed = clearShrinkReclaimPublishedCondition(job) || changed
+		changed = clearResizeBlockedCondition(job) || changed
+		changed = clearResizeFailedCondition(job) || changed
+
+	case "ResizeBlocked":
+		blockReason := reasonResizeBlockedByWorkload
+		switch planReason {
+		case "PreemptionInProgress":
+			blockReason = reasonResizeBlockedByPreemption
+		case "TargetBelowMinimum", "TargetAboveMaximum":
+			blockReason = reasonResizeBlockedByBounds
+		case "DRAConstraintsBlock":
+			blockReason = reasonResizeBlockedByDRA
+		}
+		changed = setResizeBlockedCondition(job, blockReason, planMessage, now)
+		changed = clearResizePendingCondition(job) || changed
+		changed = clearShrinkingInPlaceCondition(job) || changed
+		changed = clearShrinkReclaimPublishedCondition(job) || changed
+		changed = clearResizeCheckpointingCondition(job) || changed
+		changed = clearRelaunchingForResizeCondition(job) || changed
+		changed = clearResizeFailedCondition(job) || changed
+
+	case "ResizeInProgress":
+		// Keep existing execution conditions; just ensure no conflicting states.
+		changed = clearResizePendingCondition(job)
+		changed = clearResizeBlockedCondition(job) || changed
+		changed = clearResizeFailedCondition(job) || changed
+
+	case "ReclaimPublished":
+		changed = setShrinkReclaimPublishedCondition(job,
+			"reclaimablePods published; waiting for surplus pod termination", now)
+		changed = clearResizePendingCondition(job) || changed
+		changed = clearShrinkingInPlaceCondition(job) || changed
+		changed = clearResizeBlockedCondition(job) || changed
+		changed = clearResizeFailedCondition(job) || changed
+	}
+
+	return changed
 }
