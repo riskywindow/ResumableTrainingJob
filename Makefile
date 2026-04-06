@@ -45,6 +45,9 @@ PHASE6_TRAINER_IMAGE ?= $(PHASE5_TRAINER_IMAGE)
 .PHONY: phase7-submit-success phase7-submit-fail
 .PHONY: phase7-inspect-launchgate phase7-inspect-workload phase7-inspect-provisioningrequest phase7-inspect-checkpoints
 .PHONY: phase8-up phase8-down phase8-status phase8-load-images phase8-smoke phase8-profile
+.PHONY: phase8-submit phase8-pause phase8-resume
+.PHONY: phase8-inspect-dra phase8-inspect-kueue phase8-inspect-checkpoints
+.PHONY: e2e-phase8
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -757,3 +760,39 @@ phase8-profile:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
 	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
 	  ./hack/dev/phase8-profile.sh
+
+# ── Phase 8 demo / inspect targets ─────────────────────────────────
+#
+# phase8-submit:              Submit a DRA-backed RTJ.
+#                              PHASE8_SAMPLE=launch (default) | pause-resume | incompatible
+# phase8-pause:               Pause the DRA-backed RTJ.
+# phase8-resume:              Resume the DRA-backed RTJ.
+# phase8-inspect-dra:         Inspect DRA device status: device mode, fingerprint,
+#                              ResourceClaimTemplates, ResourceClaims, DeviceClass,
+#                              ResourceSlices, allocation state.
+# phase8-inspect-kueue:       Inspect Kueue accounting: ClusterQueue usage,
+#                              Workload admission, deviceClassMappings resolution.
+# phase8-inspect-checkpoints: Inspect checkpoint device-profile metadata:
+#                              fingerprints, compatibility assessment, store contents.
+# e2e-phase8:                 Run Phase 8 e2e tests.
+
+phase8-submit:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE8_RTJ_NAME=$(PHASE8_RTJ_NAME) PHASE8_TRAINER_IMAGE=$(PHASE8_TRAINER_IMAGE) ./hack/dev/phase8-submit-dra.sh
+
+phase8-pause:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE8_RTJ_NAME=$(PHASE8_RTJ_NAME) ./hack/dev/phase8-pause-dra.sh
+
+phase8-resume:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE8_RTJ_NAME=$(PHASE8_RTJ_NAME) ./hack/dev/phase8-resume-dra.sh
+
+phase8-inspect-dra:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE8_RTJ_NAME=$(PHASE8_RTJ_NAME) ./hack/dev/phase8-inspect-dra.sh
+
+phase8-inspect-kueue:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE8_RTJ_NAME=$(PHASE8_RTJ_NAME) ./hack/dev/phase8-inspect-kueue.sh
+
+phase8-inspect-checkpoints:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE8_RTJ_NAME=$(PHASE8_RTJ_NAME) ./hack/dev/phase8-inspect-checkpoints.sh
+
+e2e-phase8:
+	RUN_KIND_E2E=1 PHASE8_TRAINER_IMAGE=$(PHASE8_TRAINER_IMAGE) go test ./test/e2e -run 'TestDRAQuotaAndAllocation|TestDRAResumeCompatibleProfile|TestDRAIncompatibleResumeRejection' -v -timeout 20m

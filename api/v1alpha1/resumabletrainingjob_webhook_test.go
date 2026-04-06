@@ -1712,6 +1712,778 @@ func TestWebhookDeepCopyIndependenceForDeviceStatus(t *testing.T) {
 	}
 }
 
+// --- Phase 9 webhook tests: elasticity ---
+
+func TestWebhookDefaultPreservesPhase8SpecWithoutElasticity(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Elasticity = nil
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	// Phase 8 spec should pass without elasticity.
+	if job.Spec.Elasticity != nil {
+		t.Fatalf("expected elasticity to remain nil for Phase 8 backward compat")
+	}
+}
+
+func TestWebhookDefaultSetsElasticityModeWhenEmpty(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Elasticity = &ElasticitySpec{} // mode empty
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	if job.Spec.Elasticity.Mode != DefaultElasticityMode {
+		t.Fatalf("expected elasticity mode to default to %q, got %q",
+			DefaultElasticityMode, job.Spec.Elasticity.Mode)
+	}
+}
+
+func TestWebhookDefaultSetsInPlaceShrinkPolicyForManualMode(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode: ElasticityModeManual,
+		// inPlaceShrinkPolicy and reclaimMode not set
+	}
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	if job.Spec.Elasticity.InPlaceShrinkPolicy != DefaultInPlaceShrinkPolicy {
+		t.Fatalf("expected inPlaceShrinkPolicy to default to %q, got %q",
+			DefaultInPlaceShrinkPolicy, job.Spec.Elasticity.InPlaceShrinkPolicy)
+	}
+	if job.Spec.Elasticity.ReclaimMode != DefaultReclaimMode {
+		t.Fatalf("expected reclaimMode to default to %q, got %q",
+			DefaultReclaimMode, job.Spec.Elasticity.ReclaimMode)
+	}
+}
+
+func TestWebhookDefaultPreservesExplicitElasticityMode(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:                ElasticityModeManual,
+		InPlaceShrinkPolicy: InPlaceShrinkPolicyNever,
+	}
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	if job.Spec.Elasticity.Mode != ElasticityModeManual {
+		t.Fatalf("expected mode to stay %q, got %q",
+			ElasticityModeManual, job.Spec.Elasticity.Mode)
+	}
+	if job.Spec.Elasticity.InPlaceShrinkPolicy != InPlaceShrinkPolicyNever {
+		t.Fatalf("expected inPlaceShrinkPolicy to stay %q, got %q",
+			InPlaceShrinkPolicyNever, job.Spec.Elasticity.InPlaceShrinkPolicy)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsElasticityManualMode(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:            ElasticityModeManual,
+		TargetWorkerCount: ptr.To[int32](4),
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected Manual elasticity spec to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsElasticityDisabled(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode: ElasticityModeDisabled,
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected Disabled elasticity spec to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsManualWithoutAllowWorldSizeChange(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Resume.AllowWorldSizeChange = false
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode: ElasticityModeManual,
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject Manual mode without allowWorldSizeChange")
+	}
+	if !strings.Contains(err.Error(), "allowWorldSizeChange") {
+		t.Fatalf("expected error about allowWorldSizeChange, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsTargetBelowMinCount(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:            ElasticityModeManual,
+		TargetWorkerCount: ptr.To[int32](2), // below minCount of 4
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject targetWorkerCount below minCount")
+	}
+	if !strings.Contains(err.Error(), "minCount") {
+		t.Fatalf("expected error about minCount, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsTargetAbovePreferredCount(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:            ElasticityModeManual,
+		TargetWorkerCount: ptr.To[int32](10), // above preferredCount of 8
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject targetWorkerCount above preferredCount")
+	}
+	if !strings.Contains(err.Error(), "preferredCount") {
+		t.Fatalf("expected error about preferredCount, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateRejectsTargetWithDisabledMode(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:            ElasticityModeDisabled,
+		TargetWorkerCount: ptr.To[int32](4), // not allowed when Disabled
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	_, err := wh.ValidateCreate(context.Background(), job)
+	if err == nil {
+		t.Fatalf("expected validation to reject targetWorkerCount with Disabled mode")
+	}
+	if !strings.Contains(err.Error(), "targetWorkerCount") {
+		t.Fatalf("expected error about targetWorkerCount, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsManualWithoutTarget(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Manual mode with no target is valid (no resize requested yet).
+	job := minimalValidRTJ()
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode: ElasticityModeManual,
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected Manual mode without target to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateUpdateRejectsElasticityModeChangeWhileUnsuspended(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	oldJob := minimalValidRTJ()
+	oldJob.Spec.Resume.AllowWorldSizeChange = true
+	oldJob.Spec.Elasticity = &ElasticitySpec{
+		Mode: ElasticityModeManual,
+	}
+	oldJob.Spec.Suspend = ptr.To(false) // unsuspended
+	oldJob.Default()
+
+	newJob := oldJob.DeepCopy()
+	newJob.Spec.Elasticity = &ElasticitySpec{
+		Mode: ElasticityModeDisabled,
+	}
+
+	_, err := wh.ValidateUpdate(context.Background(), oldJob, newJob)
+	if err == nil {
+		t.Fatalf("expected elasticity mode change while unsuspended to fail")
+	}
+	if !strings.Contains(err.Error(), "elasticity") {
+		t.Fatalf("expected error about elasticity mode change, got %v", err)
+	}
+}
+
+func TestWebhookValidateUpdateAllowsElasticityModeChangeWhileSuspended(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	oldJob := minimalValidRTJ()
+	oldJob.Spec.Resume.AllowWorldSizeChange = true
+	oldJob.Spec.Suspend = ptr.To(true) // suspended
+	oldJob.Default()
+
+	newJob := oldJob.DeepCopy()
+	newJob.Spec.Resume.AllowWorldSizeChange = true
+	newJob.Spec.Elasticity = &ElasticitySpec{
+		Mode: ElasticityModeManual,
+	}
+	newJob.Spec.Suspend = ptr.To(true)
+
+	if _, err := wh.ValidateUpdate(context.Background(), oldJob, newJob); err != nil {
+		t.Fatalf("expected elasticity mode change while suspended to succeed, got %v", err)
+	}
+}
+
+func TestWebhookValidateUpdateAllowsTargetWorkerCountChange(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	oldJob := minimalValidRTJ()
+	oldJob.Spec.Identity.WorldSize = 8
+	oldJob.Spec.Resume.AllowWorldSizeChange = true
+	oldJob.Spec.Elasticity = &ElasticitySpec{
+		Mode:            ElasticityModeManual,
+		TargetWorkerCount: ptr.To[int32](8),
+	}
+	oldJob.Spec.Suspend = ptr.To(false) // unsuspended — target change is the manual resize trigger
+	oldJob.Default()
+
+	newJob := oldJob.DeepCopy()
+	newJob.Spec.Elasticity.TargetWorkerCount = ptr.To[int32](4)
+
+	if _, err := wh.ValidateUpdate(context.Background(), oldJob, newJob); err != nil {
+		t.Fatalf("expected target worker count change to succeed, got %v", err)
+	}
+}
+
+func TestWebhookDefaultDoesNotInjectPhase9Status(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:            ElasticityModeManual,
+		TargetWorkerCount: ptr.To[int32](4),
+	}
+	job.Spec.Suspend = nil
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	// Defaulting must NOT inject Phase 9 elasticity status.
+	if job.Status.Elasticity != nil {
+		t.Fatalf("webhook defaulting must not inject elasticity status")
+	}
+}
+
+func TestWebhookValidateUpdatePreservesPhase9StatusFields(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	oldJob := minimalValidRTJ()
+	oldJob.Spec.Identity.WorldSize = 8
+	oldJob.Spec.Resume.AllowWorldSizeChange = true
+	oldJob.Spec.Elasticity = &ElasticitySpec{
+		Mode:            ElasticityModeManual,
+		TargetWorkerCount: ptr.To[int32](4),
+	}
+	oldJob.Spec.Suspend = ptr.To(true)
+	oldJob.Default()
+
+	// Simulate controller setting Phase 9 status.
+	oldJob.Status.Elasticity = &ElasticityStatus{
+		DesiredWorkerCount:   8,
+		TargetWorkerCount:    4,
+		ActiveWorkerCount:    8,
+		AdmittedWorkerCount:  8,
+		ResizeState:          ResizeStateInProgress,
+		ResizeReason:         "InPlaceShrinkInProgress",
+		CurrentExecutionMode: ExecutionModeElastic,
+		ResizePath:           ResizePathInPlace,
+		ReclaimableWorkerCount:   4,
+		ReclaimablePodsPublished: true,
+		InPlaceShrinkSupported:   true,
+	}
+
+	newJob := oldJob.DeepCopy()
+	// User-only change: update target.
+	newJob.Spec.Elasticity.TargetWorkerCount = ptr.To[int32](6)
+
+	if _, err := wh.ValidateUpdate(context.Background(), oldJob, newJob); err != nil {
+		t.Fatalf("expected update with Phase 9 status to succeed, got %v", err)
+	}
+
+	// Status fields must be preserved.
+	if newJob.Status.Elasticity == nil {
+		t.Fatalf("expected elasticity status to be preserved through webhook")
+	}
+	if newJob.Status.Elasticity.ResizeState != ResizeStateInProgress {
+		t.Fatalf("expected resizeState to be preserved, got %q", newJob.Status.Elasticity.ResizeState)
+	}
+	if newJob.Status.Elasticity.ReclaimableWorkerCount != 4 {
+		t.Fatalf("expected reclaimableWorkerCount to be preserved, got %d",
+			newJob.Status.Elasticity.ReclaimableWorkerCount)
+	}
+	if !newJob.Status.Elasticity.InPlaceShrinkSupported {
+		t.Fatalf("expected inPlaceShrinkSupported to be preserved")
+	}
+}
+
+func TestWebhookValidateCreateAcceptsPhase8ManifestForPhase9(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Full Phase 8 spec with all features enabled, no elasticity.
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		PodSetName:             "trainer",
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{
+		Name: "aggressive-shaping",
+	}
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				Count:           8,
+			},
+		}},
+	}
+	job.Spec.Elasticity = nil // Phase 8: no elasticity
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected full Phase 8 spec to pass Phase 9 validation, got %v", err)
+	}
+
+	// Elasticity must remain nil.
+	if job.Spec.Elasticity != nil {
+		t.Fatalf("expected elasticity to stay nil for Phase 8 backward compatibility")
+	}
+}
+
+func TestWebhookValidateCreateAcceptsFullPhase9Spec(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Full Phase 9 spec with all optional features enabled.
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		PodSetName:             "trainer",
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Topology = &TopologySpec{
+		Mode:          TopologyModeRequired,
+		TopologyLevel: "topology.kubernetes.io/zone",
+	}
+	job.Spec.PriorityPolicyRef = &PriorityPolicyReference{
+		Name: "aggressive-shaping",
+	}
+	job.Spec.ManagedBy = MultiKueueControllerName
+	job.Spec.Devices = &DeviceSpec{
+		Mode: DeviceModeDRA,
+		Claims: []DeviceClaimSpec{{
+			Name:       "gpu",
+			Containers: []string{"worker"},
+			Request: DeviceRequestSpec{
+				DeviceClassName: "gpu.example.com",
+				Count:           8,
+			},
+		}},
+	}
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:                ElasticityModeManual,
+		TargetWorkerCount:   ptr.To[int32](4),
+		InPlaceShrinkPolicy: InPlaceShrinkPolicyIfSupported,
+		ReclaimMode:         ReclaimModeReclaimablePods,
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected full Phase 9 spec to pass validation, got %v", err)
+	}
+}
+
+func TestIsElasticityEnabled(t *testing.T) {
+	tests := []struct {
+		name       string
+		elasticity *ElasticitySpec
+		want       bool
+	}{
+		{name: "nil elasticity", elasticity: nil, want: false},
+		{name: "disabled", elasticity: &ElasticitySpec{Mode: ElasticityModeDisabled}, want: false},
+		{name: "manual", elasticity: &ElasticitySpec{Mode: ElasticityModeManual}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := minimalValidRTJ()
+			job.Spec.Elasticity = tt.elasticity
+			if got := job.IsElasticityEnabled(); got != tt.want {
+				t.Fatalf("IsElasticityEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveTargetWorkerCount(t *testing.T) {
+	tests := []struct {
+		name       string
+		worldSize  int32
+		elasticity *ElasticitySpec
+		want       int32
+	}{
+		{
+			name:       "nil elasticity returns worldSize",
+			worldSize:  8,
+			elasticity: nil,
+			want:       8,
+		},
+		{
+			name:      "disabled returns worldSize",
+			worldSize: 8,
+			elasticity: &ElasticitySpec{
+				Mode: ElasticityModeDisabled,
+			},
+			want: 8,
+		},
+		{
+			name:      "manual with target",
+			worldSize: 8,
+			elasticity: &ElasticitySpec{
+				Mode:            ElasticityModeManual,
+				TargetWorkerCount: ptr.To[int32](4),
+			},
+			want: 4,
+		},
+		{
+			name:      "manual without target returns worldSize",
+			worldSize: 8,
+			elasticity: &ElasticitySpec{
+				Mode: ElasticityModeManual,
+			},
+			want: 8,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := minimalValidRTJ()
+			job.Spec.Identity.WorldSize = tt.worldSize
+			job.Spec.Elasticity = tt.elasticity
+			if got := job.EffectiveTargetWorkerCount(); got != tt.want {
+				t.Fatalf("EffectiveTargetWorkerCount() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWebhookValidateCreateAcceptsTargetEqualsPreferred(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Target equals preferred count — valid, means "stay at current size".
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:            ElasticityModeManual,
+		TargetWorkerCount: ptr.To[int32](8), // equals worldSize
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected target=preferred to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsTargetEqualsMinCount(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	// Target equals minCount — valid boundary.
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Parallelism = &ParallelismSpec{
+		PreferredCount:         8,
+		MinCount:               ptr.To[int32](4),
+		EnablePartialAdmission: true,
+	}
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:            ElasticityModeManual,
+		TargetWorkerCount: ptr.To[int32](4), // equals minCount
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected target=minCount to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookValidateCreateAcceptsElasticityWithInPlaceShrinkNever(t *testing.T) {
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	job.Spec.Identity.WorldSize = 8
+	job.Spec.Resume.AllowWorldSizeChange = true
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:                ElasticityModeManual,
+		TargetWorkerCount:   ptr.To[int32](4),
+		InPlaceShrinkPolicy: InPlaceShrinkPolicyNever,
+	}
+	job.Spec.Suspend = ptr.To(true)
+	job.Default()
+
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("expected InPlaceShrinkPolicyNever to pass validation, got %v", err)
+	}
+}
+
+func TestWebhookDeepCopyIndependenceForElasticitySpec(t *testing.T) {
+	job := minimalValidRTJ()
+	job.Spec.Elasticity = &ElasticitySpec{
+		Mode:                ElasticityModeManual,
+		TargetWorkerCount:   ptr.To[int32](4),
+		InPlaceShrinkPolicy: InPlaceShrinkPolicyIfSupported,
+		ReclaimMode:         ReclaimModeReclaimablePods,
+	}
+
+	copied := job.DeepCopy()
+
+	// Mutate the copy.
+	copied.Spec.Elasticity.Mode = ElasticityModeDisabled
+	*copied.Spec.Elasticity.TargetWorkerCount = 99
+	copied.Spec.Elasticity.InPlaceShrinkPolicy = InPlaceShrinkPolicyNever
+
+	// Original should be unchanged.
+	if job.Spec.Elasticity.Mode != ElasticityModeManual {
+		t.Fatalf("deep copy mutation leaked to original: mode")
+	}
+	if *job.Spec.Elasticity.TargetWorkerCount != 4 {
+		t.Fatalf("deep copy mutation leaked to original: targetWorkerCount")
+	}
+	if job.Spec.Elasticity.InPlaceShrinkPolicy != InPlaceShrinkPolicyIfSupported {
+		t.Fatalf("deep copy mutation leaked to original: inPlaceShrinkPolicy")
+	}
+}
+
+func TestWebhookDeepCopyIndependenceForElasticityStatus(t *testing.T) {
+	job := minimalValidRTJ()
+	job.Status.Elasticity = &ElasticityStatus{
+		DesiredWorkerCount:   8,
+		TargetWorkerCount:    4,
+		ActiveWorkerCount:    8,
+		AdmittedWorkerCount:  8,
+		ResizeState:          ResizeStateInProgress,
+		ResizePath:           ResizePathInPlace,
+		ReclaimableWorkerCount: 4,
+		InPlaceShrinkSupported: true,
+	}
+
+	copied := job.DeepCopy()
+
+	// Mutate the copy.
+	copied.Status.Elasticity.ResizeState = ResizeStateIdle
+	copied.Status.Elasticity.ReclaimableWorkerCount = 0
+
+	// Original should be unchanged.
+	if job.Status.Elasticity.ResizeState != ResizeStateInProgress {
+		t.Fatalf("deep copy mutation leaked to original: resizeState")
+	}
+	if job.Status.Elasticity.ReclaimableWorkerCount != 4 {
+		t.Fatalf("deep copy mutation leaked to original: reclaimableWorkerCount")
+	}
+}
+
+func TestWebhookBackwardCompatPhase8DecodeWithoutElasticity(t *testing.T) {
+	// Simulate a Phase 8 RTJ that has no elasticity field at all.
+	// After defaulting, elasticity should remain nil (zero-value).
+	scheme := webhookTestScheme(t)
+	wh := &ResumableTrainingJobWebhook{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+		DefaultQueueExist: func(string) bool { return false },
+	}
+
+	job := minimalValidRTJ()
+	// Explicitly ensure no Phase 9 fields.
+	job.Spec.Elasticity = nil
+	job.Spec.Suspend = ptr.To(true)
+
+	if err := wh.Default(context.Background(), job); err != nil {
+		t.Fatalf("default webhook returned error: %v", err)
+	}
+
+	// Elasticity must not be injected.
+	if job.Spec.Elasticity != nil {
+		t.Fatalf("Phase 8 backward compat: elasticity must not be injected by defaulting")
+	}
+
+	// Validate should pass.
+	if _, err := wh.ValidateCreate(context.Background(), job); err != nil {
+		t.Fatalf("Phase 8 backward compat: validation should pass, got %v", err)
+	}
+
+	// Helper functions should return Phase 8 defaults.
+	if job.IsElasticityEnabled() {
+		t.Fatalf("IsElasticityEnabled should be false for Phase 8 RTJ")
+	}
+	if got := job.EffectiveTargetWorkerCount(); got != job.Spec.Identity.WorldSize {
+		t.Fatalf("EffectiveTargetWorkerCount should return worldSize for Phase 8 RTJ, got %d", got)
+	}
+}
+
 func webhookTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()

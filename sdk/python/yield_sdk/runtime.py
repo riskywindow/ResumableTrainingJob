@@ -43,6 +43,11 @@ class RuntimeConfig:
     original_world_size: int | None = None
     allow_world_size_change: bool = False
 
+    # Phase 9: elasticity fields.
+    elasticity_mode: str = "Disabled"
+    target_worker_count: int | None = None
+    supports_in_place_shrink: bool = False
+
     def checkpoint_root_uri(self, checkpoint_id: str) -> str:
         root = self.checkpoint_storage_uri.rstrip("/")
         return f"{root}/checkpoints/{checkpoint_id}"
@@ -74,6 +79,14 @@ class RuntimeConfig:
         original_world_size = int(original_ws) if original_ws else None
         allow_world_size_change = os.environ.get("YIELD_SDK_ALLOW_WORLD_SIZE_CHANGE", "").lower() in ("1", "true", "yes")
 
+        # Phase 9: elasticity fields.
+        elasticity_mode = os.environ.get("YIELD_SDK_ELASTICITY_MODE", "Disabled")
+        target_ws = os.environ.get("YIELD_SDK_TARGET_WORKER_COUNT")
+        target_worker_count = int(target_ws) if target_ws else None
+        supports_in_place_shrink = os.environ.get(
+            "YIELD_SDK_SUPPORTS_IN_PLACE_SHRINK", ""
+        ).lower() in ("1", "true", "yes")
+
         return cls(
             cluster_identity=cluster_identity,
             rtj_identity=rtj_identity,
@@ -94,4 +107,7 @@ class RuntimeConfig:
             yield_marker_uri=yield_marker_uri,
             original_world_size=original_world_size,
             allow_world_size_change=allow_world_size_change,
+            elasticity_mode=elasticity_mode,
+            target_worker_count=target_worker_count,
+            supports_in_place_shrink=supports_in_place_shrink,
         )

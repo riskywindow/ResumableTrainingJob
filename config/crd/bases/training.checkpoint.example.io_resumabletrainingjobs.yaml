@@ -319,6 +319,46 @@ spec:
                                 type: array
                                 items:
                                   type: string
+                # Phase 9: elasticity
+                elasticity:
+                  description: >-
+                    Configures manual target-based worker-count resize.
+                    When nil or mode is Disabled, Phase 8 behavior is
+                    preserved (fixed worker count at admission time).
+                  type: object
+                  required:
+                    - mode
+                  properties:
+                    mode:
+                      description: >-
+                        Elasticity mode. Disabled: no elasticity (Phase 8).
+                        Manual: operator-initiated target-based resize.
+                      type: string
+                      enum:
+                        - Disabled
+                        - Manual
+                    targetWorkerCount:
+                      description: >-
+                        Desired worker count. Must be >= minCount and
+                        <= preferredCount. Only meaningful when mode is Manual.
+                      type: integer
+                      format: int32
+                      minimum: 1
+                    inPlaceShrinkPolicy:
+                      description: >-
+                        Controls in-place shrink behavior. IfSupported: try
+                        in-place first, fall back to C&R. Never: always C&R.
+                      type: string
+                      enum:
+                        - IfSupported
+                        - Never
+                    reclaimMode:
+                      description: >-
+                        Controls quota release mechanism for in-place shrink.
+                        Only ReclaimablePods is supported.
+                      type: string
+                      enum:
+                        - ReclaimablePods
                 control:
                   type: object
                   properties:
@@ -982,3 +1022,127 @@ spec:
                         Device profile fingerprint active when the most
                         recent resume was performed.
                       type: string
+                # Phase 9: elasticity status
+                elasticity:
+                  description: >-
+                    Controller-owned elasticity state. Populated only when
+                    spec.elasticity is present with mode != Disabled. Nil when
+                    elasticity is not configured (Phase 8 behavior). All fields
+                    are controller-owned.
+                  type: object
+                  properties:
+                    desiredWorkerCount:
+                      description: >-
+                        Effective preferred count from parallelism.preferredCount
+                        or identity.worldSize.
+                      type: integer
+                      format: int32
+                    targetWorkerCount:
+                      description: >-
+                        Mirrors spec.elasticity.targetWorkerCount for
+                        observability.
+                      type: integer
+                      format: int32
+                    activeWorkerCount:
+                      description: Observed number of running worker pods.
+                      type: integer
+                      format: int32
+                    admittedWorkerCount:
+                      description: >-
+                        Number of worker pods admitted by Kueue for the
+                        scalable worker pod set.
+                      type: integer
+                      format: int32
+                    resizeState:
+                      description: Current state of the resize operation.
+                      type: string
+                      enum:
+                        - Idle
+                        - Pending
+                        - InProgress
+                        - Blocked
+                        - Completed
+                        - Failed
+                    resizeReason:
+                      description: >-
+                        Machine-readable reason for the current resize state.
+                      type: string
+                    currentExecutionMode:
+                      description: >-
+                        Whether the RTJ is in fixed or elastic execution mode.
+                      type: string
+                      enum:
+                        - Fixed
+                        - Elastic
+                    resizePath:
+                      description: >-
+                        Resize execution path chosen for current/most recent
+                        resize.
+                      type: string
+                      enum:
+                        - InPlace
+                        - CheckpointAndRelaunch
+                    reclaimableWorkerCount:
+                      description: >-
+                        Workers declared reclaimable via
+                        Workload.status.reclaimablePods.
+                      type: integer
+                      format: int32
+                    reclaimablePodsPublished:
+                      description: >-
+                        Whether reclaimablePods has been written to the
+                        Workload status.
+                      type: boolean
+                    inPlaceShrinkSupported:
+                      description: >-
+                        Whether the runtime advertises in-place shrink support.
+                      type: boolean
+                    lastResizeEvent:
+                      description: >-
+                        Description of the most recent resize event.
+                      type: string
+                    lastResizeCheckpoint:
+                      description: >-
+                        Checkpoint from the most recent C&R resize. Nil when
+                        the last resize was in-place or no resize has occurred.
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          minLength: 1
+                        storageURI:
+                          type: string
+                          minLength: 1
+                        manifestURI:
+                          type: string
+                        completionTime:
+                          type: string
+                          format: date-time
+                        sourceRunAttempt:
+                          type: integer
+                          format: int32
+                        compatibilityState:
+                          type: string
+                          enum:
+                            - Compatible
+                            - Incompatible
+                            - Unknown
+                        compatibilityReason:
+                          type: string
+                        worldSize:
+                          type: integer
+                          format: int32
+                    lastResizeFailureReason:
+                      description: >-
+                        Reason for the most recent resize failure.
+                      type: string
+                    lastElasticTransitionTime:
+                      description: >-
+                        When the elasticity state last changed.
+                      type: string
+                      format: date-time
+                    lastResizeCompletedTime:
+                      description: >-
+                        When the most recent resize completed successfully.
+                      type: string
+                      format: date-time

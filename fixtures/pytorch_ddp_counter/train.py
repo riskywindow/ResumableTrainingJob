@@ -10,6 +10,14 @@ from typing import Any
 
 from yield_sdk.checkpoint import restore_checkpoint, save_checkpoint
 from yield_sdk.control import ControlFile
+from yield_sdk.elastic import (
+    ElasticConfig,
+    ElasticityMode,
+    ResizeDirection,
+    build_resize_checkpoint_context,
+    evaluate_resize,
+    write_resize_signal,
+)
 from yield_sdk.runtime import RuntimeConfig, choose_backend
 from yield_sdk.storage import S3Storage
 
@@ -26,7 +34,7 @@ def _import_torch():
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Phase 1 DDP counter trainer with manual yield support.")
+    parser = argparse.ArgumentParser(description="DDP counter trainer with manual yield and elastic resize support.")
     parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--input-dim", type=int, default=8)
@@ -38,6 +46,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backend", default=None)
     parser.add_argument("--control-file", default=os.environ.get("YIELD_SDK_CONTROL_FILE"))
     parser.add_argument("--progress-file", default=os.environ.get("YIELD_SDK_PROGRESS_FILE"))
+    # Phase 9: elastic resize knobs.
+    parser.add_argument("--shrink-barrier-timeout", type=float, default=30.0,
+                        help="Timeout in seconds for the cooperative shrink barrier.")
+    parser.add_argument("--warmup-steps", type=int, default=0,
+                        help="Steps to skip before checking for resize requests.")
+    parser.add_argument("--resize-check-every", type=int, default=1,
+                        help="Check for resize requests every N steps.")
+    parser.add_argument("--resize-signal-dir", default=os.environ.get("YIELD_SDK_RESIZE_SIGNAL_DIR"),
+                        help="Directory to write resize signal files.")
     return parser.parse_args()
 
 
@@ -92,6 +109,43 @@ def write_json(path: str | Path | None, payload: dict[str, Any]) -> None:
     target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _build_elastic_config(
+    runtime: RuntimeConfig,
+    world_size: int,
+    control_file: ControlFile,
+    shrink_barrier_timeout: float,
+) -> ElasticConfig:
+    """Build the elastic config from runtime + control file state."""
+    mode_raw = runtime.elasticity_mode
+    try:
+        mode = ElasticityMode(mode_raw)
+    except ValueError:
+        mode = ElasticityMode.DISABLED
+
+    if mode == ElasticityMode.DISABLED:
+        return ElasticConfig(
+            mode=ElasticityMode.DISABLED,
+            current_worker_count=world_size,
+            target_worker_count=world_size,
+        )
+
+    # Target comes from control file first, then runtime config, then current.
+    target = world_size
+    if runtime.target_worker_count is not None:
+        target = runtime.target_worker_count
+    record = control_file.read()
+    if record.target_worker_count is not None:
+        target = record.target_worker_count
+
+    return ElasticConfig(
+        mode=mode,
+        current_worker_count=world_size,
+        target_worker_count=target,
+        supports_in_place_shrink=runtime.supports_in_place_shrink,
+        shrink_barrier_timeout_seconds=shrink_barrier_timeout,
+    )
+
+
 def main() -> int:
     args = parse_args()
     runtime = RuntimeConfig.from_env()
@@ -114,6 +168,9 @@ def main() -> int:
             restore_manifest_uri=runtime.restore_manifest_uri,
             yield_marker_path=runtime.yield_marker_path,
             yield_marker_uri=runtime.yield_marker_uri,
+            elasticity_mode=runtime.elasticity_mode,
+            target_worker_count=runtime.target_worker_count,
+            supports_in_place_shrink=runtime.supports_in_place_shrink,
         )
 
     backend = choose_backend(args.backend)
@@ -137,6 +194,9 @@ def main() -> int:
             restore_manifest_uri=runtime.restore_manifest_uri,
             yield_marker_path=runtime.yield_marker_path,
             yield_marker_uri=runtime.yield_marker_uri,
+            elasticity_mode=runtime.elasticity_mode,
+            target_worker_count=runtime.target_worker_count,
+            supports_in_place_shrink=runtime.supports_in_place_shrink,
         )
 
     torch, _, nn, DDP = _import_torch()
@@ -191,6 +251,8 @@ def main() -> int:
                     "restored_checkpoint_id": restored_checkpoint_id,
                     "start_step": start_step,
                     "restore_mode": restore_mode,
+                    "elasticity_mode": runtime.elasticity_mode,
+                    "target_worker_count": runtime.target_worker_count,
                 }
             ),
             flush=True,
@@ -243,6 +305,84 @@ def main() -> int:
                     flush=True,
                 )
 
+        # Phase 9: check for elastic resize requests.
+        if (
+            step > start_step + args.warmup_steps
+            and step % args.resize_check_every == 0
+        ):
+            elastic_config = _build_elastic_config(
+                runtime, world_size, control, args.shrink_barrier_timeout,
+            )
+            if elastic_config.resize_requested:
+                resize_outcome = evaluate_resize(elastic_config)
+                resize_ctx = build_resize_checkpoint_context(elastic_config)
+
+                barrier()
+                checkpoint_result = save_checkpoint(
+                    model=wrapped_model,
+                    optimizer=optimizer,
+                    runtime=runtime,
+                    storage=storage,
+                    step=step,
+                    trainer_state={
+                        "last_loss": last_loss,
+                        "yielded": True,
+                        "resize_direction": elastic_config.resize_direction.value,
+                        "resize_target": elastic_config.target_worker_count,
+                    },
+                )
+                barrier()
+
+                # Patch resize metadata into manifest if context is available.
+                if resize_ctx is not None:
+                    manifest = checkpoint_result.manifest
+                    manifest.resize_active_worker_count = resize_ctx.active_worker_count
+                    manifest.resize_target_worker_count = resize_ctx.target_worker_count
+                    manifest.resize_direction = resize_ctx.resize_direction.value
+                    manifest.resize_reason = resize_ctx.resize_reason
+                    manifest.resize_in_place_shrink_supported = resize_ctx.in_place_shrink_supported
+                    # Re-upload manifest with resize metadata.
+                    if rank == 0:
+                        manifest_json = manifest.to_json()
+                        storage.upload_bytes(
+                            manifest_json.encode("utf-8"),
+                            manifest.manifest_uri,
+                            content_type="application/json",
+                        )
+
+                if rank == 0:
+                    # Write resize signal for the controller.
+                    signal_dir = Path(args.resize_signal_dir) if args.resize_signal_dir else None
+                    if signal_dir:
+                        write_resize_signal(
+                            signal_dir,
+                            resize_outcome,
+                            checkpoint_id=checkpoint_result.manifest.checkpoint_id,
+                            manifest_uri=checkpoint_result.manifest.manifest_uri,
+                        )
+
+                    print(
+                        json.dumps(
+                            {
+                                "event": "resize_checkpoint",
+                                "direction": elastic_config.resize_direction.value,
+                                "currentWorkerCount": elastic_config.current_worker_count,
+                                "targetWorkerCount": elastic_config.target_worker_count,
+                                "outcome": resize_outcome.outcome.value,
+                                "requiresCheckpoint": resize_outcome.requires_checkpoint,
+                                "inPlaceShrinkSupported": resize_outcome.in_place_shrink_supported,
+                                "checkpointID": checkpoint_result.manifest.checkpoint_id,
+                                "manifestURI": checkpoint_result.manifest.manifest_uri,
+                                "step": step,
+                            }
+                        ),
+                        flush=True,
+                    )
+
+                destroy_distributed()
+                return 0
+
+        # Phase 1: check for manual yield (pause) request.
         control_record = control.read()
         if control_record.yield_requested:
             barrier()

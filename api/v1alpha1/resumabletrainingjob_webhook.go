@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	webhook "sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -110,6 +111,17 @@ func (w *ResumableTrainingJobWebhook) ValidateUpdate(_ context.Context, oldObj, 
 		))
 	}
 
+	// Phase 9: elasticity mode is immutable once set (can transition
+	// Disabled->Manual or Manual->Disabled only while suspended).
+	oldMode := elasticityModeOf(oldCopy)
+	newMode := elasticityModeOf(newCopy)
+	if oldMode != newMode && !ptr.Deref(newCopy.Spec.Suspend, false) {
+		allErrs = append(allErrs, field.Forbidden(
+			field.NewPath("spec", "elasticity", "mode"),
+			fmt.Sprintf("elasticity mode change from %q to %q requires the RTJ to be suspended", oldMode, newMode),
+		))
+	}
+
 	return nil, allErrs.ToAggregate()
 }
 
@@ -172,4 +184,16 @@ func (j *rtjWebhookGenericJob) PodsReady(context.Context) bool {
 
 func (j *rtjWebhookGenericJob) GVK() schema.GroupVersionKind {
 	return GroupVersion.WithKind("ResumableTrainingJob")
+}
+
+// elasticityModeOf returns the effective elasticity mode, defaulting to Disabled
+// when the elasticity spec is nil.
+func elasticityModeOf(job *ResumableTrainingJob) ElasticityMode {
+	if job.Spec.Elasticity == nil {
+		return ElasticityModeDisabled
+	}
+	if job.Spec.Elasticity.Mode == "" {
+		return ElasticityModeDisabled
+	}
+	return job.Spec.Elasticity.Mode
 }

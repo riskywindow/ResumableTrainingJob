@@ -94,6 +94,15 @@ class CheckpointManifest:
     # Empty/None when DRA is not configured (Phase 7 backward compatibility).
     device_profile_fingerprint: str | None = None
 
+    # Phase 9: elasticity metadata — present only when the checkpoint was
+    # produced during a resize event.  All fields are None when elasticity
+    # is disabled or no resize was active at checkpoint time.
+    resize_active_worker_count: int | None = None
+    resize_target_worker_count: int | None = None
+    resize_direction: str | None = None     # "Shrink" | "Grow" | None
+    resize_reason: str | None = None
+    resize_in_place_shrink_supported: bool | None = None
+
     def validate(self) -> None:
         _require_non_empty(self.checkpoint_id, "checkpointID")
         _require_non_empty(self.cluster_identity, "clusterIdentity")
@@ -161,6 +170,17 @@ class CheckpointManifest:
             payload["crossSizeRestoreSupported"] = self.cross_size_restore_supported
         if self.device_profile_fingerprint is not None:
             payload["deviceProfileFingerprint"] = self.device_profile_fingerprint
+        # Phase 9: elasticity metadata.
+        if self.resize_active_worker_count is not None:
+            payload["resizeActiveWorkerCount"] = self.resize_active_worker_count
+        if self.resize_target_worker_count is not None:
+            payload["resizeTargetWorkerCount"] = self.resize_target_worker_count
+        if self.resize_direction is not None:
+            payload["resizeDirection"] = self.resize_direction
+        if self.resize_reason is not None:
+            payload["resizeReason"] = self.resize_reason
+        if self.resize_in_place_shrink_supported is not None:
+            payload["resizeInPlaceShrinkSupported"] = self.resize_in_place_shrink_supported
         return payload
 
     def to_json(self) -> str:
@@ -196,6 +216,12 @@ class CheckpointManifest:
             checkpoint_format_version=payload.get("checkpointFormatVersion"),
             cross_size_restore_supported=payload.get("crossSizeRestoreSupported"),
             device_profile_fingerprint=payload.get("deviceProfileFingerprint"),
+            # Phase 9: elasticity metadata.
+            resize_active_worker_count=payload.get("resizeActiveWorkerCount"),
+            resize_target_worker_count=payload.get("resizeTargetWorkerCount"),
+            resize_direction=payload.get("resizeDirection"),
+            resize_reason=payload.get("resizeReason"),
+            resize_in_place_shrink_supported=payload.get("resizeInPlaceShrinkSupported"),
         )
         manifest.validate()
         return manifest

@@ -18,6 +18,7 @@ type Recorder struct {
 	phases          map[string]string
 	workloads       map[string]workloadObservation
 	launchGateState map[string]string
+	deviceModeState map[string]string
 }
 
 type workloadObservation struct {
@@ -533,6 +534,75 @@ var (
 			Help:      "Total failures (permanent rejection) set by the fake provisioner backend.",
 		},
 	)
+
+	// Phase 8 metrics.
+	rtjsByDeviceMode = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "rtjs_by_device_mode",
+			Help:      "Current ResumableTrainingJobs by device mode (Disabled, DRA).",
+		},
+		[]string{"mode"},
+	)
+	draTemplateReconciles = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "dra_template_reconciles_total",
+			Help:      "Total successful ResourceClaimTemplate reconcile operations (create, update, no-op).",
+		},
+	)
+	draTemplateFailures = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "dra_template_failures_total",
+			Help:      "Total failed ResourceClaimTemplate reconcile attempts.",
+		},
+	)
+	draClaimsGenerated = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "dra_claims_generated_total",
+			Help:      "Total ResourceClaim objects created from RTJ-managed ResourceClaimTemplates.",
+		},
+	)
+	draClaimAllocationSummary = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "dra_claim_allocation_summary_total",
+			Help:      "Total DRA claim allocation observations by state (Pending, Allocated, Failed).",
+		},
+		[]string{"state"},
+	)
+	draResumeCompatibilityChecks = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "dra_resume_compatibility_checks_total",
+			Help:      "Total DRA device profile resume compatibility checks by result (compatible, incompatible).",
+		},
+		[]string{"result"},
+	)
+	draBackedLaunches = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "dra_backed_launches_total",
+			Help:      "Total child JobSet launches that included DRA claim references.",
+		},
+	)
+	draLaunchFailures = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "dra_launch_failures_total",
+			Help:      "Total DRA-backed launch failures (template not ready, claim injection error).",
+		},
+	)
 )
 
 func NewRecorder() *Recorder {
@@ -603,11 +673,21 @@ func NewRecorder() *Recorder {
 			capacityGuaranteedLaunches,
 			fakeProvisionerObservations,
 			fakeProvisionerFailures,
+			// Phase 8
+			rtjsByDeviceMode,
+			draTemplateReconciles,
+			draTemplateFailures,
+			draClaimsGenerated,
+			draClaimAllocationSummary,
+			draResumeCompatibilityChecks,
+			draBackedLaunches,
+			draLaunchFailures,
 		)
 		recorder = &Recorder{
 			phases:          map[string]string{},
 			workloads:       map[string]workloadObservation{},
 			launchGateState: map[string]string{},
+			deviceModeState: map[string]string{},
 		}
 	})
 	return recorder
@@ -1133,5 +1213,91 @@ func (r *Recorder) IncFakeProvisionerObservation() {
 func (r *Recorder) IncFakeProvisionerFailure() {
 	if r != nil {
 		fakeProvisionerFailures.Inc()
+	}
+}
+
+// Phase 8 recorder methods.
+
+// ObserveDeviceMode tracks the current RTJ's device mode gauge.
+func (r *Recorder) ObserveDeviceMode(rtjKey, mode string) {
+	if r == nil || rtjKey == "" || mode == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	previous, ok := r.deviceModeState[rtjKey]
+	if ok && previous == mode {
+		return
+	}
+	if ok && previous != "" {
+		rtjsByDeviceMode.WithLabelValues(previous).Dec()
+	}
+	rtjsByDeviceMode.WithLabelValues(mode).Inc()
+	r.deviceModeState[rtjKey] = mode
+}
+
+// RemoveDeviceMode cleans up the device mode gauge for a removed RTJ.
+func (r *Recorder) RemoveDeviceMode(rtjKey string) {
+	if r == nil || rtjKey == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	previous, ok := r.deviceModeState[rtjKey]
+	if !ok || previous == "" {
+		return
+	}
+	rtjsByDeviceMode.WithLabelValues(previous).Dec()
+	delete(r.deviceModeState, rtjKey)
+}
+
+// IncDRATemplateReconcile records a successful ResourceClaimTemplate reconcile.
+func (r *Recorder) IncDRATemplateReconcile() {
+	if r != nil {
+		draTemplateReconciles.Inc()
+	}
+}
+
+// IncDRATemplateFailure records a failed ResourceClaimTemplate reconcile.
+func (r *Recorder) IncDRATemplateFailure() {
+	if r != nil {
+		draTemplateFailures.Inc()
+	}
+}
+
+// AddDRAClaimsGenerated records ResourceClaim objects created.
+func (r *Recorder) AddDRAClaimsGenerated(count int) {
+	if r != nil && count > 0 {
+		draClaimsGenerated.Add(float64(count))
+	}
+}
+
+// ObserveDRAClaimAllocation records a DRA claim allocation state observation.
+func (r *Recorder) ObserveDRAClaimAllocation(state string) {
+	if r != nil && state != "" {
+		draClaimAllocationSummary.WithLabelValues(state).Inc()
+	}
+}
+
+// ObserveDRAResumeCompatibility records a DRA resume compatibility check result.
+func (r *Recorder) ObserveDRAResumeCompatibility(result string) {
+	if r != nil && result != "" {
+		draResumeCompatibilityChecks.WithLabelValues(result).Inc()
+	}
+}
+
+// IncDRABackedLaunch records a DRA-backed child JobSet launch.
+func (r *Recorder) IncDRABackedLaunch() {
+	if r != nil {
+		draBackedLaunches.Inc()
+	}
+}
+
+// IncDRALaunchFailure records a DRA-backed launch failure.
+func (r *Recorder) IncDRALaunchFailure() {
+	if r != nil {
+		draLaunchFailures.Inc()
 	}
 }

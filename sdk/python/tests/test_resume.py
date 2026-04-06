@@ -332,5 +332,81 @@ class IncompatibleResumeTests(unittest.TestCase):
             self.assertIn("cross-size restore not supported", str(ctx.exception))
 
 
+class Phase9NonElasticBackwardCompatTests(unittest.TestCase):
+    """Tests proving that existing pause/resume behavior is unchanged when elasticity is disabled."""
+
+    def test_save_without_elasticity_has_no_resize_fields(self) -> None:
+        """A checkpoint saved without elasticity has no Phase 9 resize metadata."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            storage = _make_storage()
+            runtime = _make_runtime(base, world_size=1, run_attempt=1)
+
+            model = torch.nn.Linear(4, 1)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+            result = save_checkpoint(
+                model=model, optimizer=optimizer, runtime=runtime,
+                storage=storage, step=3,
+            )
+
+            self.assertIsNone(result.manifest.resize_active_worker_count)
+            self.assertIsNone(result.manifest.resize_target_worker_count)
+            self.assertIsNone(result.manifest.resize_direction)
+            self.assertIsNone(result.manifest.resize_reason)
+            self.assertIsNone(result.manifest.resize_in_place_shrink_supported)
+
+    def test_restore_from_non_elastic_checkpoint_works(self) -> None:
+        """A checkpoint saved without elasticity can be restored normally."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            storage = _make_storage()
+            save_runtime = _make_runtime(base, world_size=1, run_attempt=1)
+
+            model = torch.nn.Linear(4, 1)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+            save_result = save_checkpoint(
+                model=model, optimizer=optimizer, runtime=save_runtime,
+                storage=storage, step=7, trainer_state={"last_loss": 0.3},
+            )
+
+            restore_runtime = _make_runtime(
+                base, world_size=1, run_attempt=2,
+                restore_manifest_uri=save_result.manifest.manifest_uri,
+            )
+
+            restored_model = torch.nn.Linear(4, 1)
+            restored_optimizer = torch.optim.AdamW(restored_model.parameters(), lr=0.01)
+            restore_result = restore_checkpoint(
+                model=restored_model, optimizer=restored_optimizer,
+                runtime=restore_runtime, storage=storage,
+            )
+
+            self.assertEqual(restore_result.step, 7)
+            self.assertEqual(restore_result.restore_mode, RESTORE_MODE_SAME_SIZE)
+            # Manifest should have no resize metadata.
+            self.assertIsNone(restore_result.manifest.resize_direction)
+
+    def test_runtime_config_default_elasticity_is_disabled(self) -> None:
+        """RuntimeConfig defaults to elasticity disabled for backward compat."""
+        runtime = RuntimeConfig(
+            cluster_identity="test",
+            rtj_identity="test",
+            run_attempt=1,
+            runtime_mode="DDP",
+            world_size=1,
+            gpu_shape="cpu",
+            image_identity="test",
+            code_version_identity="test",
+            optimizer_mode="adamw",
+            sharding_mode="replicated-optimizer-state",
+            checkpoint_storage_uri="s3://test/test",
+            staging_root=Path("/tmp/test-staging"),
+            restore_root=Path("/tmp/test-restore"),
+        )
+        self.assertEqual(runtime.elasticity_mode, "Disabled")
+        self.assertIsNone(runtime.target_worker_count)
+        self.assertFalse(runtime.supports_in_place_shrink)
+
+
 if __name__ == "__main__":
     unittest.main()
