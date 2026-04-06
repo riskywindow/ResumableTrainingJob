@@ -514,3 +514,108 @@ Step 3: Handle resize target changes during in-progress operations:
 
 Step 4: E2E resize scenario tests with the DDP fixture.
 ```
+
+---
+
+## Session: 2026-04-06 (Dev Environment Profile)
+
+### Decisions made
+
+1. **Single ClusterQueue is sufficient for dynamic reclaim**: reclaimablePods
+   quota release is per-Workload within the same queue. No cohort or
+   borrowing configuration is needed.
+
+2. **Quota sized at 1250m CPU / 1280Mi memory**: Enough for one 4-worker RTJ
+   (1000m) but not two. After shrink 4→2, released 500m admits a second
+   2-worker RTJ. This creates a deterministic contention scenario.
+
+3. **No special Kueue feature gates required**: reclaimablePods is part of
+   the standard Workload Status API (Kueue v0.15.1+). SSA field ownership
+   is a standard Kubernetes API server feature (GA since v1.22). The
+   `rtj-elastic-reclaim` field manager works without configuration.
+
+4. **Kueue config based on Phase 7 baseline** (with waitForPodsReady) but
+   without DRA or provisioning additions. waitForPodsReady is useful for
+   detecting resize-triggered relaunch failures.
+
+5. **Three sample RTJs cover the feature matrix**:
+   - Elastic shrink: 4 workers, shrink to 2 (demonstrates reclaimablePods)
+   - Elastic grow: 2 workers, grow to 4 (demonstrates checkpoint-and-relaunch)
+   - Non-elastic: 2 workers, no elasticity (backward compatibility)
+
+6. **Fixture knobs threaded through manifests**: YIELD_SDK_ELASTICITY_MODE,
+   YIELD_SDK_SUPPORTS_IN_PLACE_SHRINK, YIELD_SDK_RESIZE_SIGNAL_DIR, plus
+   resize-signal emptyDir volume. Non-elastic sample correctly omits these.
+
+7. **Smoke test covers 17+ checks**: CRD fields, Kueue config, queues,
+   quota values, sample dry-run, fixture knobs, reclaimablePods schema
+   availability, and non-elastic sample omission verification.
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `deploy/dev/phase9/kueue/controller_manager_config.phase9.yaml` | Kueue config: RTJ external framework + waitForPodsReady |
+| `deploy/dev/phase9/queues/00-resource-flavor.yaml` | Phase 9 ResourceFlavor |
+| `deploy/dev/phase9/queues/10-cluster-queue.yaml` | ClusterQueue with dynamic reclaim quota |
+| `deploy/dev/phase9/queues/20-local-queue.yaml` | LocalQueue for phase9-cq |
+| `deploy/dev/phase9/samples/rtj-elastic-shrink.yaml` | 4-worker elastic RTJ (shrink demo) |
+| `deploy/dev/phase9/samples/rtj-elastic-grow.yaml` | 2-worker elastic RTJ (grow demo) |
+| `deploy/dev/phase9/samples/rtj-non-elastic.yaml` | Fixed-size RTJ (backward compat) |
+| `hack/dev/install-phase9-profile.sh` | Profile installation script |
+| `hack/dev/phase9-profile.sh` | Profile wrapper |
+| `hack/dev/phase9-smoke.sh` | Infrastructure smoke test (17+ checks) |
+| `docs/phase9/dev-environment.md` | Dev environment documentation |
+
+### Files changed
+
+| File | Changes |
+|---|---|
+| `Makefile` | Added Phase 9 variables and targets: phase9-up/down/status/load-images/smoke/profile |
+| `docs/phase9/session-handoff.md` | Added this session entry |
+
+### Tests run
+
+- `go build ./...` — **clean** (no code changes, manifest-only)
+- Smoke test structure verified by inspection (17+ independent checks)
+
+### Makefile targets added
+
+| Target | Description |
+|---|---|
+| `make phase9-up` | Create kind cluster + base stack + Phase 9 profile |
+| `make phase9-down` | Delete kind cluster |
+| `make phase9-status` | Show queues, quota, workloads, RTJs |
+| `make phase9-load-images` | Load images into kind |
+| `make phase9-smoke` | Run 17+ infrastructure validation checks |
+| `make phase9-profile` | Apply/re-apply Phase 9 profile |
+
+### What was NOT done (deliberately)
+
+- **No e2e test suite**: Deferred per task boundary. Infrastructure only.
+- **No demo/inspect scripts**: Phase 9 demo scripts (submit, patch, inspect
+  resize state) are a natural follow-up but not required for the profile.
+- **No reclaim completion detection**: Controller-side reclaimablePods
+  lifecycle (clear on pod termination) is the next implementation step.
+- **No DRA integration in Phase 9 profile**: Phase 9 focuses on elastic
+  resize. DRA can be layered on top if needed (Phase 8 profile provides
+  the DRA baseline).
+
+### Recommended next prompt
+
+```
+You are working on Phase 9 only for the checkpoint-native preemption controller repo.
+
+Mission: Implement reclaim completion detection and resize lifecycle finalization.
+
+Prerequisites: make phase9-up && make phase9-smoke (verify profile is active).
+
+Read docs/phase9/resize-execution.md for the execution model.
+Read docs/phase9/dev-environment.md for the dev environment design.
+Read internal/controller/elastic_execute.go for the current implementation.
+
+Step 1: Detect in-place shrink completion.
+Step 2: Add elapsed time tracking for resize operations.
+Step 3: Handle resize target changes during in-progress operations.
+Step 4: E2E resize scenario tests with the DDP fixture.
+```

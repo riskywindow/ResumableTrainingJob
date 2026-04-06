@@ -1,0 +1,42 @@
+# Phase 9: ClusterQueue sized for the dynamic reclaim demonstration.
+#
+# Quota design rationale:
+#   CPU:    1250m  (enough for one 4-worker RTJ at 250m/worker = 1000m,
+#                   but NOT enough for two 4-worker RTJs = 2000m)
+#   Memory: 1280Mi (enough for one 4-worker RTJ at 256Mi/worker = 1024Mi,
+#                   but NOT enough for two)
+#
+# Scenario:
+#   1. RTJ A runs at 4 workers (1000m CPU used, 250m free).
+#   2. RTJ B (2 workers, 500m CPU) is queued — insufficient quota.
+#   3. User patches RTJ A targetWorkerCount=2 → elastic shrink.
+#   4. Controller publishes reclaimablePods for 2 surplus workers.
+#   5. Kueue reads reclaimablePods → releases 500m CPU quota.
+#   6. RTJ B (500m) can now be admitted within the 1250m total.
+#
+# Preemption: LowerPriority within the queue, no cohort borrowing.
+# This keeps the demo self-contained to a single ClusterQueue.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: phase9-cq
+  labels:
+    checkpoint-native.dev/profile: phase9-elastic
+spec:
+  namespaceSelector:
+    matchLabels:
+      checkpoint-native.dev/kueue-managed: "true"
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+      flavors:
+        - name: phase9-flavor
+          resources:
+            - name: cpu
+              nominalQuota: 1250m
+            - name: memory
+              nominalQuota: 1280Mi
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Never

@@ -1,0 +1,110 @@
+# Phase 9 sample: Elastic shrink with dynamic quota reclaim.
+#
+# Starts with 4 workers. Patch spec.elasticity.targetWorkerCount to 2 to
+# trigger an elastic shrink. The controller evaluates the shrink path:
+#   - If runtime supports in-place shrink → publish reclaimablePods.
+#   - Otherwise (DDP default) → checkpoint-and-relaunch at smaller size.
+#
+# Deterministic fixture knobs:
+#   SLEEP_PER_STEP:              Simulated step duration (seconds)
+#   CHECKPOINT_EVERY:            Checkpoint frequency (steps)
+#   TOTAL_STEPS:                 Max steps before clean exit
+#   YIELD_SDK_ELASTICITY_MODE:   Set to "Manual" to enable resize
+#   YIELD_SDK_TARGET_WORKER_COUNT: Injected by controller on resize
+#   YIELD_SDK_SUPPORTS_IN_PLACE_SHRINK: Runtime capability flag
+#   YIELD_SDK_RESIZE_SIGNAL_DIR: Directory for resize signal files
+#
+# To trigger shrink:
+#   kubectl patch rtj __RTJ_NAME__ -n __DEV_NAMESPACE__ --type=merge \
+#     -p '{"spec":{"elasticity":{"targetWorkerCount":2}}}'
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase9-training
+spec:
+  suspend: true
+  queueName: phase9-training
+  elasticity:
+    mode: Manual
+    targetWorkerCount: 4
+    inPlaceShrinkPolicy: IfSupported
+    reclaimMode: ReclaimablePods
+  parallelism:
+    minCount: 1
+    preferredCount: 4
+    allowWorldSizeChange: true
+  identity:
+    worldSize: 4
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: virtual-gpu-v1
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 4
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: YIELD_SDK_ELASTICITY_MODE
+                            value: Manual
+                          - name: YIELD_SDK_SUPPORTS_IN_PLACE_SHRINK
+                            value: "false"
+                          - name: YIELD_SDK_RESIZE_SIGNAL_DIR
+                            value: /var/run/yield-sdk/resize
+                          - name: AWS_ACCESS_KEY_ID
+                            value: minioadmin
+                          - name: AWS_SECRET_ACCESS_KEY
+                            value: minioadmin123
+                          - name: AWS_ENDPOINT_URL
+                            value: http://minio.checkpoint-dev.svc.cluster.local:9000
+                          - name: AWS_DEFAULT_REGION
+                            value: us-east-1
+                          - name: SLEEP_PER_STEP
+                            value: "2"
+                          - name: CHECKPOINT_EVERY
+                            value: "3"
+                          - name: TOTAL_STEPS
+                            value: "200"
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                          - name: resize-signal
+                            mountPath: /var/run/yield-sdk/resize
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+                      - name: resize-signal
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3
