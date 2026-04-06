@@ -27,6 +27,13 @@ const (
 	DefaultDeviceMode               = DeviceModeDisabled
 	DefaultDeviceRequestCount int32 = 1
 
+	// Phase 9: Elasticity defaults.
+	DefaultElasticityMode        = ElasticityModeDisabled
+	DefaultInPlaceShrinkPolicy   = InPlaceShrinkPolicyIfSupported
+	DefaultReclaimMode           = ReclaimModeReclaimablePods
+	DefaultResizeState           = ResizeStateIdle
+	DefaultExecutionMode         = ExecutionModeFixed
+
 	// MultiKueueControllerName is the well-known managedBy value for Kueue MultiKueue.
 	// When spec.managedBy is set to this value, the RTJ is eligible for MultiKueue
 	// dispatch to a remote worker cluster.
@@ -322,6 +329,229 @@ const (
 	ClaimAllocationUnknown ClaimAllocationState = "Unknown"
 )
 
+// -------------------------------------------------------------------
+// Phase 9 — Elasticity enums and types
+// -------------------------------------------------------------------
+
+// ElasticityMode controls whether elasticity (dynamic worker-count resize) is
+// enabled for this RTJ and how it is triggered.
+// +kubebuilder:validation:Enum=Disabled;Manual
+type ElasticityMode string
+
+const (
+	// ElasticityModeDisabled disables elasticity. Phase 8 behavior preserved.
+	ElasticityModeDisabled ElasticityMode = "Disabled"
+
+	// ElasticityModeManual enables manual target-based resize. An operator
+	// (or higher-level automation) patches spec.elasticity.targetWorkerCount
+	// to trigger resize evaluation.
+	ElasticityModeManual ElasticityMode = "Manual"
+)
+
+// InPlaceShrinkPolicy controls the in-place shrink behavior for this RTJ.
+// +kubebuilder:validation:Enum=IfSupported;Never
+type InPlaceShrinkPolicy string
+
+const (
+	// InPlaceShrinkPolicyIfSupported tries in-place shrink first, falling back
+	// to checkpoint-and-relaunch if the runtime does not support live replica
+	// reduction (checked via the annotation on the child JobSet).
+	InPlaceShrinkPolicyIfSupported InPlaceShrinkPolicy = "IfSupported"
+
+	// InPlaceShrinkPolicyNever always uses checkpoint-and-relaunch for shrink,
+	// even if the runtime supports in-place replica reduction.
+	InPlaceShrinkPolicyNever InPlaceShrinkPolicy = "Never"
+)
+
+// ReclaimMode controls how freed quota is released during shrink.
+// +kubebuilder:validation:Enum=ReclaimablePods
+type ReclaimMode string
+
+const (
+	// ReclaimModeReclaimablePods uses Workload.status.reclaimablePods
+	// to signal Kueue that surplus pods should be reclaimed.
+	ReclaimModeReclaimablePods ReclaimMode = "ReclaimablePods"
+)
+
+// ResizeState describes the current state of a resize operation.
+// +kubebuilder:validation:Enum=Idle;Pending;InProgress;Blocked;Completed;Failed
+type ResizeState string
+
+const (
+	// ResizeStateIdle means no resize is in progress.
+	ResizeStateIdle ResizeState = "Idle"
+
+	// ResizeStatePending means a resize has been requested but evaluation
+	// has not yet started.
+	ResizeStatePending ResizeState = "Pending"
+
+	// ResizeStateInProgress means a resize is actively being executed.
+	ResizeStateInProgress ResizeState = "InProgress"
+
+	// ResizeStateBlocked means a resize cannot proceed (e.g., waiting for
+	// quota during grow, or runtime does not support the requested path).
+	ResizeStateBlocked ResizeState = "Blocked"
+
+	// ResizeStateCompleted means the most recent resize completed successfully.
+	ResizeStateCompleted ResizeState = "Completed"
+
+	// ResizeStateFailed means the most recent resize failed.
+	ResizeStateFailed ResizeState = "Failed"
+)
+
+// ResizePath describes the resize execution path chosen by the controller.
+// +kubebuilder:validation:Enum=InPlace;CheckpointAndRelaunch
+type ResizePath string
+
+const (
+	// ResizePathInPlace means the resize is executed in-place by patching the
+	// child JobSet's replica count and writing reclaimablePods.
+	ResizePathInPlace ResizePath = "InPlace"
+
+	// ResizePathCheckpointAndRelaunch means the resize requires a full
+	// checkpoint-and-relaunch cycle.
+	ResizePathCheckpointAndRelaunch ResizePath = "CheckpointAndRelaunch"
+)
+
+// ExecutionMode describes the current execution mode of the RTJ.
+// +kubebuilder:validation:Enum=Fixed;Elastic
+type ExecutionMode string
+
+const (
+	// ExecutionModeFixed means the RTJ is running with a fixed worker count
+	// (Phase 8 and earlier behavior).
+	ExecutionModeFixed ExecutionMode = "Fixed"
+
+	// ExecutionModeElastic means the RTJ is running with elasticity enabled
+	// and may undergo resize operations.
+	ExecutionModeElastic ExecutionMode = "Elastic"
+)
+
+// ElasticitySpec configures manual target-based worker-count resize.
+// When nil or mode is Disabled, the RTJ follows Phase 8 semantics (fixed
+// worker count determined at admission time).
+type ElasticitySpec struct {
+	// Mode sets the elasticity mode.
+	// Disabled: no elasticity (Phase 8 behavior preserved).
+	// Manual: operator-initiated target-based resize.
+	// +kubebuilder:validation:Enum=Disabled;Manual
+	Mode ElasticityMode `json:"mode"`
+
+	// TargetWorkerCount is the desired number of worker pods. When set and
+	// different from the current admitted count, the controller evaluates
+	// whether the delta can be applied in-place or requires
+	// checkpoint-and-relaunch. Must be >= parallelism.minCount (or >= 1 when
+	// minCount is not set). Must be <= parallelism.preferredCount (or <=
+	// identity.worldSize when preferredCount is not set).
+	// Only meaningful when mode is Manual.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	TargetWorkerCount *int32 `json:"targetWorkerCount,omitempty"`
+
+	// InPlaceShrinkPolicy controls in-place shrink behavior.
+	// IfSupported: try in-place shrink first, fall back to
+	//   checkpoint-and-relaunch if the runtime does not support it.
+	// Never: always use checkpoint-and-relaunch for shrink.
+	// Default: IfSupported.
+	// +optional
+	// +kubebuilder:validation:Enum=IfSupported;Never
+	InPlaceShrinkPolicy InPlaceShrinkPolicy `json:"inPlaceShrinkPolicy,omitempty"`
+
+	// ReclaimMode controls how freed quota is released during in-place shrink.
+	// ReclaimablePods: use Workload.status.reclaimablePods (only supported mode).
+	// Default: ReclaimablePods.
+	// +optional
+	// +kubebuilder:validation:Enum=ReclaimablePods
+	ReclaimMode ReclaimMode `json:"reclaimMode,omitempty"`
+}
+
+// ElasticityStatus captures the controller-owned elasticity state.
+// All fields are controller-authored; users must not write to this section.
+type ElasticityStatus struct {
+	// DesiredWorkerCount is the effective preferred worker count from
+	// spec.parallelism.preferredCount or spec.identity.worldSize.
+	// +optional
+	DesiredWorkerCount int32 `json:"desiredWorkerCount,omitempty"`
+
+	// TargetWorkerCount mirrors spec.elasticity.targetWorkerCount for
+	// observability. Zero when no resize is requested.
+	// +optional
+	TargetWorkerCount int32 `json:"targetWorkerCount,omitempty"`
+
+	// ActiveWorkerCount is the observed number of running worker pods.
+	// +optional
+	ActiveWorkerCount int32 `json:"activeWorkerCount,omitempty"`
+
+	// AdmittedWorkerCount is the number of worker pods currently admitted
+	// by Kueue for the scalable worker pod set.
+	// +optional
+	AdmittedWorkerCount int32 `json:"admittedWorkerCount,omitempty"`
+
+	// ResizeState is the current state of the resize operation.
+	// +optional
+	ResizeState ResizeState `json:"resizeState,omitempty"`
+
+	// ResizeReason is a machine-readable reason for the current resize state.
+	// Examples: "TargetEqualsAdmitted", "InPlaceShrinkInProgress",
+	// "WaitingForQuota", "CheckpointInProgress".
+	// +optional
+	ResizeReason string `json:"resizeReason,omitempty"`
+
+	// CurrentExecutionMode indicates whether the RTJ is running in fixed
+	// or elastic mode.
+	// +optional
+	CurrentExecutionMode ExecutionMode `json:"currentExecutionMode,omitempty"`
+
+	// ResizePath is the resize execution path chosen by the controller for
+	// the current or most recent resize. Empty when no resize has occurred.
+	// +optional
+	ResizePath ResizePath `json:"resizePath,omitempty"`
+
+	// ReclaimableWorkerCount is the number of worker pods declared
+	// reclaimable via Workload.status.reclaimablePods. Zero when no
+	// in-place shrink is in progress.
+	// +optional
+	ReclaimableWorkerCount int32 `json:"reclaimableWorkerCount,omitempty"`
+
+	// ReclaimablePodsPublished indicates whether the controller has written
+	// reclaimablePods entries to the Workload status for the current
+	// in-place shrink. False when no in-place shrink is active.
+	// +optional
+	ReclaimablePodsPublished bool `json:"reclaimablePodsPublished,omitempty"`
+
+	// InPlaceShrinkSupported indicates whether the current runtime
+	// advertises support for live replica reduction (checked via annotation
+	// on the child JobSet).
+	// +optional
+	InPlaceShrinkSupported bool `json:"inPlaceShrinkSupported,omitempty"`
+
+	// LastResizeEvent describes the most recent resize event for
+	// observability. Empty when no resize has occurred.
+	// +optional
+	LastResizeEvent string `json:"lastResizeEvent,omitempty"`
+
+	// LastResizeCheckpoint is a reference to the checkpoint written during
+	// the most recent checkpoint-and-relaunch resize. Nil when the last
+	// resize was in-place or no resize has occurred.
+	// +optional
+	LastResizeCheckpoint *CheckpointReference `json:"lastResizeCheckpoint,omitempty"`
+
+	// LastResizeFailureReason is the machine-readable reason for the most
+	// recent resize failure. Empty when the last resize succeeded.
+	// +optional
+	LastResizeFailureReason string `json:"lastResizeFailureReason,omitempty"`
+
+	// LastElasticTransitionTime is when the elasticity state last changed
+	// (e.g., resize started, completed, failed, or mode changed).
+	// +optional
+	LastElasticTransitionTime *metav1.Time `json:"lastElasticTransitionTime,omitempty"`
+
+	// LastResizeCompletedTime is when the most recent resize completed
+	// successfully.
+	// +optional
+	LastResizeCompletedTime *metav1.Time `json:"lastResizeCompletedTime,omitempty"`
+}
+
 // DeviceSpec declares DRA device requirements for worker pods.
 // When present with mode=DRA, the RTJ operator creates companion
 // ResourceClaimTemplate objects from the claim templates and renders
@@ -484,6 +714,12 @@ type ResumableTrainingJobSpec struct {
 	// unchanged. No Phase 7 behavior changes when this field is nil.
 	// +optional
 	Devices *DeviceSpec `json:"devices,omitempty"`
+
+	// Elasticity configures manual target-based worker-count resize.
+	// When nil or mode is Disabled, the RTJ follows Phase 8 semantics
+	// (fixed worker count determined at admission time).
+	// +optional
+	Elasticity *ElasticitySpec `json:"elasticity,omitempty"`
 
 	// Control carries the declarative manual pause or resume intent.
 	Control *ControlSpec `json:"control,omitempty"`
@@ -718,6 +954,13 @@ type ResumableTrainingJobStatus struct {
 	// All fields are controller-owned.
 	// +optional
 	Devices *DeviceStatus `json:"devices,omitempty"`
+
+	// Elasticity captures the controller-owned elasticity state for this RTJ.
+	// Populated only when spec.elasticity is present with mode != Disabled.
+	// Nil when elasticity is not configured (Phase 8 behavior).
+	// All fields are controller-owned; users must not write to this section.
+	// +optional
+	Elasticity *ElasticityStatus `json:"elasticity,omitempty"`
 }
 
 // AdmissionStatus captures the admitted shape from Kueue.
@@ -1272,6 +1515,19 @@ func (r *ResumableTrainingJob) Default() {
 			}
 		}
 	}
+	// Phase 9: default elasticity mode when elasticity is set but mode is empty.
+	if r.Spec.Elasticity != nil && r.Spec.Elasticity.Mode == "" {
+		r.Spec.Elasticity.Mode = DefaultElasticityMode
+	}
+	// Phase 9: default inPlaceShrinkPolicy when elasticity is Manual and policy is empty.
+	if r.Spec.Elasticity != nil && r.Spec.Elasticity.Mode == ElasticityModeManual {
+		if r.Spec.Elasticity.InPlaceShrinkPolicy == "" {
+			r.Spec.Elasticity.InPlaceShrinkPolicy = DefaultInPlaceShrinkPolicy
+		}
+		if r.Spec.Elasticity.ReclaimMode == "" {
+			r.Spec.Elasticity.ReclaimMode = DefaultReclaimMode
+		}
+	}
 	r.projectKueueLabels()
 }
 
@@ -1415,6 +1671,9 @@ func (r *ResumableTrainingJob) validationErrors() field.ErrorList {
 
 	// Phase 8: devices validation
 	allErrs = append(allErrs, r.validateDevices()...)
+
+	// Phase 9: elasticity validation
+	allErrs = append(allErrs, r.validateElasticity()...)
 
 	return allErrs
 }
@@ -1613,6 +1872,93 @@ func (r *ResumableTrainingJob) validateDeviceClaims(claims []DeviceClaimSpec, fl
 	return allErrs
 }
 
+func (r *ResumableTrainingJob) validateElasticity() field.ErrorList {
+	var allErrs field.ErrorList
+	e := r.Spec.Elasticity
+	if e == nil {
+		return allErrs
+	}
+	fldPath := field.NewPath("spec", "elasticity")
+
+	switch e.Mode {
+	case ElasticityModeDisabled:
+		// When disabled, targetWorkerCount should not be set.
+		if e.TargetWorkerCount != nil {
+			allErrs = append(allErrs, field.Forbidden(fldPath.Child("targetWorkerCount"),
+				"targetWorkerCount must not be set when mode is Disabled"))
+		}
+	case ElasticityModeManual:
+		// Manual mode requires allowWorldSizeChange=true because resize changes world size.
+		if !r.Spec.Resume.AllowWorldSizeChange {
+			allErrs = append(allErrs, field.Forbidden(fldPath.Child("mode"),
+				"elasticity mode Manual requires spec.resume.allowWorldSizeChange=true"))
+		}
+		// Validate targetWorkerCount bounds when set.
+		if e.TargetWorkerCount != nil {
+			tc := *e.TargetWorkerCount
+			if tc < 1 {
+				allErrs = append(allErrs, field.Invalid(fldPath.Child("targetWorkerCount"), tc,
+					"targetWorkerCount must be >= 1"))
+			}
+			// Must respect minCount.
+			effectiveMin := r.EffectiveElasticityMinCount()
+			if tc < effectiveMin {
+				allErrs = append(allErrs, field.Invalid(fldPath.Child("targetWorkerCount"), tc,
+					fmt.Sprintf("targetWorkerCount must be >= minCount (effective: %d)", effectiveMin)))
+			}
+			// Must respect preferredCount (upper bound).
+			effectiveMax := r.EffectivePreferredCount()
+			if tc > effectiveMax {
+				allErrs = append(allErrs, field.Invalid(fldPath.Child("targetWorkerCount"), tc,
+					fmt.Sprintf("targetWorkerCount must be <= preferredCount (effective: %d)", effectiveMax)))
+			}
+		}
+		// Validate inPlaceShrinkPolicy.
+		if e.InPlaceShrinkPolicy != "" &&
+			e.InPlaceShrinkPolicy != InPlaceShrinkPolicyIfSupported &&
+			e.InPlaceShrinkPolicy != InPlaceShrinkPolicyNever {
+			allErrs = append(allErrs, field.NotSupported(fldPath.Child("inPlaceShrinkPolicy"),
+				e.InPlaceShrinkPolicy,
+				[]string{string(InPlaceShrinkPolicyIfSupported), string(InPlaceShrinkPolicyNever)}))
+		}
+		// Validate reclaimMode.
+		if e.ReclaimMode != "" && e.ReclaimMode != ReclaimModeReclaimablePods {
+			allErrs = append(allErrs, field.NotSupported(fldPath.Child("reclaimMode"),
+				e.ReclaimMode,
+				[]string{string(ReclaimModeReclaimablePods)}))
+		}
+	default:
+		allErrs = append(allErrs, field.NotSupported(fldPath.Child("mode"), e.Mode,
+			[]string{string(ElasticityModeDisabled), string(ElasticityModeManual)}))
+	}
+
+	return allErrs
+}
+
+// EffectiveElasticityMinCount returns the effective minimum worker count for
+// elasticity validation. Defaults to 1 when parallelism.minCount is not set.
+func (r *ResumableTrainingJob) EffectiveElasticityMinCount() int32 {
+	if r.Spec.Parallelism != nil && r.Spec.Parallelism.MinCount != nil {
+		return *r.Spec.Parallelism.MinCount
+	}
+	return 1
+}
+
+// IsElasticityEnabled returns true when elasticity is configured with mode != Disabled.
+func (r *ResumableTrainingJob) IsElasticityEnabled() bool {
+	return r.Spec.Elasticity != nil && r.Spec.Elasticity.Mode != ElasticityModeDisabled
+}
+
+// EffectiveTargetWorkerCount returns the effective target worker count.
+// Returns the admitted/preferred count when elasticity is not active or
+// targetWorkerCount is not set.
+func (r *ResumableTrainingJob) EffectiveTargetWorkerCount() int32 {
+	if r.IsElasticityEnabled() && r.Spec.Elasticity.TargetWorkerCount != nil {
+		return *r.Spec.Elasticity.TargetWorkerCount
+	}
+	return r.EffectivePreferredCount()
+}
+
 // IsDevicesEnabled returns true when DRA device requests are active.
 func (r *ResumableTrainingJob) IsDevicesEnabled() bool {
 	return r.Spec.Devices != nil && r.Spec.Devices.Mode == DeviceModeDRA
@@ -1807,6 +2153,30 @@ func (d DeviceMode) String() string {
 
 func (c ClaimAllocationState) String() string {
 	return string(c)
+}
+
+func (e ElasticityMode) String() string {
+	return string(e)
+}
+
+func (p InPlaceShrinkPolicy) String() string {
+	return string(p)
+}
+
+func (r ReclaimMode) String() string {
+	return string(r)
+}
+
+func (s ResizeState) String() string {
+	return string(s)
+}
+
+func (p ResizePath) String() string {
+	return string(p)
+}
+
+func (e ExecutionMode) String() string {
+	return string(e)
 }
 
 func (r ResumableTrainingJob) String() string {

@@ -1,6 +1,6 @@
 # PyTorch DDP Counter Fixture
 
-This fixture is the toy trainer for Phase 1-3.
+This fixture is the toy trainer for Phase 1-9.
 It is intentionally small and deterministic enough for local `kind` smoke coverage while still exercising the real runtime contract:
 
 - `torch.distributed` execution
@@ -12,6 +12,7 @@ It is intentionally small and deterministic enough for local `kind` smoke covera
 - manifest-last completion
 - manual yield driven by a mounted control file
 - **Phase 3:** world-size-flexible resume via DCP resharding
+- **Phase 9:** elastic resize detection, cooperative shrink protocol, resize signal files
 
 ## Current Shape
 
@@ -51,6 +52,45 @@ different world size, DCP handles the resharding automatically. The restore mode
 The manifest records `crossSizeRestoreSupported: true` for all DCP checkpoints,
 indicating they can be restored at a different world size.
 
+## Phase 9: Elastic Resize
+
+When `YIELD_SDK_ELASTICITY_MODE=Manual`, the fixture checks for resize requests
+at step boundaries.  The target worker count comes from (in priority order):
+
+1. The control file's `targetWorkerCount` field.
+2. The `YIELD_SDK_TARGET_WORKER_COUNT` environment variable.
+3. The current world size (no resize).
+
+When a resize is detected:
+
+1. The resize is evaluated (`evaluate_resize()`) to determine direction and path.
+2. All ranks barrier and save a checkpoint with resize metadata.
+3. A `resize-signal.json` is written to `--resize-signal-dir` (rank 0).
+4. The trainer exits cleanly.
+
+The DDP fixture always reports `supports_in_place_shrink=false` because DDP
+requires process group reinitialization for rank changes.  This means every
+resize (shrink or grow) produces a checkpoint for the controller to relaunch.
+
+### Fixture Knobs
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--shrink-barrier-timeout` | `30.0` | Cooperative shrink barrier timeout (seconds) |
+| `--warmup-steps` | `0` | Steps to skip before checking for resize requests |
+| `--resize-check-every` | `1` | Check for resize every N steps |
+| `--resize-signal-dir` | `$YIELD_SDK_RESIZE_SIGNAL_DIR` | Directory for resize signal files |
+
+### Resize Control File Example
+
+```json
+{
+  "desiredState": "Running",
+  "targetWorkerCount": 2,
+  "resizeRequestId": "resize-001"
+}
+```
+
 ## Required Environment
 
 The fixture reads these main environment variables:
@@ -68,6 +108,10 @@ The fixture reads these main environment variables:
 - `YIELD_SDK_WORLD_SIZE` (current world size)
 - `YIELD_SDK_ORIGINAL_WORLD_SIZE` (checkpoint world size, Phase 3)
 - `YIELD_SDK_ALLOW_WORLD_SIZE_CHANGE` (`true` to enable resharding, Phase 3)
+- `YIELD_SDK_ELASTICITY_MODE` (`Manual` to enable elastic resize, Phase 9)
+- `YIELD_SDK_TARGET_WORKER_COUNT` (target worker count, Phase 9)
+- `YIELD_SDK_SUPPORTS_IN_PLACE_SHRINK` (runtime capability, Phase 9)
+- `YIELD_SDK_RESIZE_SIGNAL_DIR` (signal file directory, Phase 9)
 
 ## Local Example
 
@@ -89,3 +133,19 @@ torchrun --standalone --nproc-per-node=2 fixtures/pytorch_ddp_counter/train.py -
 ```
 
 Patch the control file to `Paused` while the trainer is running to trigger a clean yield.
+
+### Elastic Resize Example
+
+```bash
+# Same base env as above, plus:
+export YIELD_SDK_ELASTICITY_MODE=Manual
+export YIELD_SDK_TARGET_WORKER_COUNT=4
+export YIELD_SDK_RESIZE_SIGNAL_DIR=$PWD/.tmp/signals
+
+# Start at world_size=2, target=4 → trainer detects grow and saves checkpoint
+torchrun --standalone --nproc-per-node=2 fixtures/pytorch_ddp_counter/train.py \
+  --max-steps 12 --sleep-per-step 0.5 --resize-signal-dir .tmp/signals
+
+# Check the resize signal
+cat .tmp/signals/resize-signal.json
+```

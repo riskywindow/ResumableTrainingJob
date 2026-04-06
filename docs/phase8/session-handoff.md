@@ -1021,23 +1021,249 @@ All tests pass (0 failures, 0 regressions):
 5. **Cross-cluster device profile mismatch e2e** (deferred; covered
    by single-cluster tests)
 
+### Recommended next prompt (superseded by Session 9)
+
+See Session 9 below.
+
+---
+
+## Session 9: Observability and demo tooling
+
+**Date**: 2026-04-03
+
+### Mission
+
+Add observability, demo tooling, and operator UX for DRA-backed RTJs.
+Lightweight metrics, developer-friendly inspect/submit/pause/resume
+commands, and documentation for operations and troubleshooting.
+
+### What was implemented
+
+#### 1. Phase 8 DRA metrics (`internal/metrics/metrics.go`)
+
+Added 8 new Prometheus metrics under `checkpoint_native_operator_`:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `rtjs_by_device_mode` | GaugeVec (mode) | Current RTJs by device mode (Disabled, DRA) |
+| `dra_template_reconciles_total` | Counter | Successful ResourceClaimTemplate reconcile ops |
+| `dra_template_failures_total` | Counter | Failed ResourceClaimTemplate reconcile attempts |
+| `dra_claims_generated_total` | Counter | ResourceClaim objects created from RTJ templates |
+| `dra_claim_allocation_summary_total` | CounterVec (state) | Claim allocation observations by state |
+| `dra_resume_compatibility_checks_total` | CounterVec (result) | Resume compatibility checks by result |
+| `dra_backed_launches_total` | Counter | Child JobSet launches with DRA claim references |
+| `dra_launch_failures_total` | Counter | DRA-backed launch failures |
+
+Recorder methods follow the established pattern (nil-safe, lock-protected
+for gauge state tracking). `deviceModeState` map added to Recorder struct
+for gauge lifecycle management.
+
+#### 2. Operator startup (`cmd/operator/main.go`)
+
+Added `phase8Metrics: true` to the startup log line, following the
+Phase 3-7 pattern.
+
+#### 3. Demo/inspect scripts (`hack/dev/`)
+
+| Script | Purpose |
+|--------|---------|
+| `phase8-submit-dra.sh` | Submit DRA-backed RTJ (supports launch, pause-resume, incompatible samples) |
+| `phase8-pause-dra.sh` | Pause DRA-backed RTJ, show ResourceClaimTemplate preservation |
+| `phase8-resume-dra.sh` | Resume DRA-backed RTJ, show device profile fingerprint |
+| `phase8-inspect-dra.sh` | Full DRA status: mode, fingerprint, templates, claims, DeviceClass, slices |
+| `phase8-inspect-kueue.sh` | Kueue accounting: ClusterQueue usage, Workload admission, deviceClassMappings |
+| `phase8-inspect-checkpoints.sh` | Checkpoint device-profile metadata and compatibility assessment |
+
+All scripts follow established conventions: source `common.sh`,
+`set -euo pipefail`, `require_command`, `ensure_cluster_context`,
+environment variable overrides.
+
+#### 4. Makefile targets
+
+| Target | Description |
+|--------|-------------|
+| `make phase8-submit` | Submit DRA-backed RTJ |
+| `make phase8-pause` | Pause DRA-backed RTJ |
+| `make phase8-resume` | Resume DRA-backed RTJ |
+| `make phase8-inspect-dra` | Inspect DRA device status |
+| `make phase8-inspect-kueue` | Inspect Kueue DRA accounting |
+| `make phase8-inspect-checkpoints` | Inspect checkpoint device-profile metadata |
+| `make e2e-phase8` | Run Phase 8 e2e tests |
+
+#### 5. Documentation
+
+| Document | Content |
+|----------|---------|
+| `docs/phase8/demo.md` | Full demo walkthrough: DRA launch, ResourceClaimTemplate/Claim verification, pause/resume with same profile, incompatible rejection |
+| `docs/phase8/operations.md` | How to inspect: RTJ DRA status, ResourceClaimTemplates, ResourceClaims, DeviceClass/ResourceSlices, Kueue accounting, checkpoint device metadata |
+| `docs/phase8/troubleshooting.md` | DRA APIs missing, driver not advertising, claims not allocating, Kueue quota mismatch, incompatible resume rejection |
+
+### Files changed
+
+| File | Action |
+|---|---|
+| internal/metrics/metrics.go | Updated: added 8 Phase 8 DRA metrics, deviceModeState map, 10 recorder methods |
+| cmd/operator/main.go | Updated: added phase8Metrics startup log |
+| hack/dev/phase8-submit-dra.sh | Created: DRA RTJ submission script |
+| hack/dev/phase8-pause-dra.sh | Created: DRA RTJ pause script |
+| hack/dev/phase8-resume-dra.sh | Created: DRA RTJ resume script |
+| hack/dev/phase8-inspect-dra.sh | Created: DRA status inspection script |
+| hack/dev/phase8-inspect-kueue.sh | Created: Kueue accounting inspection script |
+| hack/dev/phase8-inspect-checkpoints.sh | Created: Checkpoint device-profile inspection script |
+| Makefile | Updated: added Phase 8 demo/inspect targets and e2e-phase8 |
+| docs/phase8/demo.md | Created: full demo walkthrough |
+| docs/phase8/operations.md | Created: operations guide |
+| docs/phase8/troubleshooting.md | Created: troubleshooting guide |
+| docs/phase8/session-handoff.md | Updated: Session 9 results |
+
+### Tests run
+
+```
+go build ./internal/metrics/   # compiles successfully
+go build ./cmd/operator/       # compiles successfully
+```
+
+No new tests added (observability session -- metrics, scripts, docs).
+Existing test suites unaffected (no behavioral changes).
+
+### What remains for Session 10+
+
+1. **Wire `observeDRAClaimStatus()`** into the main Reconcile loop
+   (observation logic exists but is not called during reconciliation)
+2. **Wire `syncDeviceResumeFingerprint()`** into the resume flow
+3. **Wire Phase 8 metric emission** into controller callsites
+   (e.g., call `IncDRATemplateReconcile()` from `reconcileDRATemplates()`,
+   call `ObserveDeviceMode()` from `ObservePhase()`, etc.)
+4. **DRA + ProvisioningRequest interaction** e2e test (OQ9)
+5. **Device failure recovery e2e** (deferred; unit-tested)
+
+### Recommended next prompt (superseded by Session 10)
+
+See Session 10 below.
+
+---
+
+## Session 10: Hardening and signoff pass
+
+**Date**: 2026-04-05
+
+### Mission
+
+Perform the Phase 8 hardening and signoff pass. Audit implementation and
+documentation against accepted contracts from Phases 0 through 8. Identify
+drift, gaps, and risks. Produce signoff artifacts.
+
+### What was produced
+
+#### 1. Consistency audit (`docs/phase8/review/consistency-audit.md`)
+
+Audited 9 areas against Phase 0-8 contracts:
+
+| Area | Verdict |
+|------|---------|
+| RTJ only Kueue-managed | NO DRIFT |
+| Child JobSets plain runtime | NO DRIFT |
+| Native DRA claims core path | NO DRIFT |
+| Companion ResourceClaimTemplate lifecycle | NO DRIFT |
+| Kueue deviceClassMappings quota/accounting | NO DRIFT |
+| Conservative checkpoint compatibility | NO DRIFT |
+| Preservation when DRA disabled | NO DRIFT |
+| Test coverage (154 unit + 4 e2e + 6 Python) | MEETS REQUIREMENTS |
+| API contract alignment (all 9 invariants) | ALIGNED |
+
+#### 2. Gaps analysis (`docs/phase8/review/gaps.md`)
+
+| Gap | Severity | Category |
+|-----|----------|----------|
+| G1: observeDRAClaimStatus() not wired | P1 | Observation |
+| G2: syncDeviceResumeFingerprint() not wired | P1 | Telemetry |
+| G3: Phase 8 metric emission not wired | P1 | Observability |
+| G4: DRA + ProvisioningRequest e2e (OQ9) | P2 | Test coverage |
+| G5: Device failure recovery e2e | P2 | Test coverage |
+| G6: CEL selector validation at webhook | P2 | Input validation |
+| G7: Multi-device-class per claim | P2 | Feature scope |
+| G8: API version boundary docs vague | P1 | Documentation |
+
+**P0 gaps: NONE.** Phase 8 is signable.
+
+#### 3. Signoff (`docs/phase8/PHASE8_SIGNOFF.md`)
+
+Summarizes:
+- 8 core capabilities delivered
+- 154 unit tests + 4 e2e tests + 6 SDK tests
+- P1 observation wiring deferred to Phase 9 Session 1
+- 4 risks identified (DRA API stability, dev driver limitations,
+  observation gaps, deviceClassMappings configuration dependency)
+- Phase 9 roadmap: wire gaps, real DRA driver integration, DRA-aware
+  priority shaping, shared claims
+
+#### 4. Updated index.md (`docs/phase8/index.md`)
+
+- Added review/signoff documents to document index
+- Added implementation docs (dra-template-lifecycle, rendering, checkpoint)
+- Added ops/demo/e2e/dev-env document links
+- Added upstream phase references
+- Tightened DRA API version note from vague to resolved (v1beta1 chosen,
+  Session 3 OQ1 resolution documented inline)
+
+#### 5. Updated session-handoff.md (`docs/phase8/session-handoff.md`)
+
+- Session 10 results appended
+- All open questions resolved or explicitly deferred
+- Phase 8 marked complete
+
+### Files changed
+
+| File | Action |
+|------|--------|
+| docs/phase8/review/consistency-audit.md | Created |
+| docs/phase8/review/gaps.md | Created |
+| docs/phase8/PHASE8_SIGNOFF.md | Created |
+| docs/phase8/index.md | Updated: added review/signoff docs, tightened API version note |
+| docs/phase8/session-handoff.md | Updated: Session 10 hardening pass results |
+
+### Open questions -- final status
+
+| OQ | Resolution |
+|----|-----------|
+| OQ1 | Resolved (Session 3): `k8s.io/api/resource/v1beta1` |
+| OQ2 | Resolved (Session 4): PodSet synthesis includes DRA fields for deviceClassMappings |
+| OQ3 | Resolved (Session 3): `DeviceSelector{CEL: &CELDeviceSelector{Expression: expr}}` |
+| OQ4 | Resolved (Session 6): self-contained example DRA driver |
+| OQ5 | Resolved (Session 2): SHA256 fingerprint |
+| OQ6 | Resolved (Session 2): gpuShape + deviceClassName coexist |
+| OQ7 | Resolved (Session 3): recreate on spec drift |
+| OQ8 | Deferred by design: multi-device-class supported at API level, single-class-per-claim is Phase 8 scope |
+| OQ9 | Deferred to Phase 9: DRA + ProvisioningRequest interaction e2e (P2 gap) |
+| OQ10 | Resolved (Session 2): no feature gate; spec.devices presence is opt-in |
+
+### Phase 8 status
+
+**COMPLETE.** Signed off with noted P1 observation-wiring gaps deferred
+to Phase 9 Session 1.
+
 ### Recommended next prompt
 
 ```
-You are working on Phase 8 Session 9 for the checkpoint-native preemption
+You are working on Phase 9 Session 1 for the checkpoint-native preemption
 controller repo.
 
-Read docs/phase8/session-handoff.md for context (Sessions 1-8).
+Read docs/phase8/PHASE8_SIGNOFF.md and docs/phase8/review/gaps.md for
+Phase 8 exit state.
 
-Session 8 implemented:
-- Multi-cluster DRA compatibility (manager suppression, worker execution)
-- Remote DRA status observability on manager
-- 7 unit tests + 1 e2e smoke test
-- Multi-cluster compatibility documentation
-
-Remaining Phase 8 work:
+Phase 9 Session 1 immediate work (from Phase 8 P1 gaps):
 1. Wire observeDRAClaimStatus() into the main Reconcile() loop
+   (after reconcileDRATemplates(), before launch gate evaluation;
+   requeue on Pending; set status changed flag)
 2. Wire syncDeviceResumeFingerprint() into resume flow
-3. DRA + ProvisioningRequest interaction e2e test (OQ9)
-4. Device failure recovery e2e (deferred; unit-tested)
+   (after compatible checkpoint selected, before child JobSet render)
+3. Wire Phase 8 metric emission into controller callsites
+   (ObserveDeviceMode in observePhase, IncDRATemplateReconcile in
+   reconcileDRATemplates, IncDRABackedLaunch in child JobSet creation,
+   remaining metrics in observeDRAClaimStatus)
+4. Update index.md DRA API version note if needed (G8)
+
+These are wiring-only changes (~30-50 lines total). The underlying logic
+is implemented and unit-tested. Focus on correctness of callsite placement
+and status-update ordering.
 ```

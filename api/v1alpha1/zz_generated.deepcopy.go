@@ -568,6 +568,11 @@ func (in *ResumableTrainingJobSpec) DeepCopyInto(out *ResumableTrainingJobSpec) 
 		*out = new(DeviceSpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.Elasticity != nil {
+		in, out := &in.Elasticity, &out.Elasticity
+		*out = new(ElasticitySpec)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Control != nil {
 		in, out := &in.Control, &out.Control
 		*out = new(ControlSpec)
@@ -672,6 +677,11 @@ func (in *ResumableTrainingJobStatus) DeepCopyInto(out *ResumableTrainingJobStat
 	if in.Devices != nil {
 		in, out := &in.Devices, &out.Devices
 		*out = new(DeviceStatus)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.Elasticity != nil {
+		in, out := &in.Elasticity, &out.Elasticity
+		*out = new(ElasticityStatus)
 		(*in).DeepCopyInto(*out)
 	}
 }
@@ -858,6 +868,54 @@ func (in *ResourceClaimTemplateReference) DeepCopy() *ResourceClaimTemplateRefer
 		return nil
 	}
 	out := new(ResourceClaimTemplateReference)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// --- Phase 9: ElasticitySpec deep copy ---
+
+func (in *ElasticitySpec) DeepCopyInto(out *ElasticitySpec) {
+	*out = *in
+	if in.TargetWorkerCount != nil {
+		in, out := &in.TargetWorkerCount, &out.TargetWorkerCount
+		*out = new(int32)
+		**out = **in
+	}
+}
+
+func (in *ElasticitySpec) DeepCopy() *ElasticitySpec {
+	if in == nil {
+		return nil
+	}
+	out := new(ElasticitySpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// --- Phase 9: ElasticityStatus deep copy ---
+
+func (in *ElasticityStatus) DeepCopyInto(out *ElasticityStatus) {
+	*out = *in
+	if in.LastResizeCheckpoint != nil {
+		in, out := &in.LastResizeCheckpoint, &out.LastResizeCheckpoint
+		*out = new(CheckpointReference)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.LastElasticTransitionTime != nil {
+		in, out := &in.LastElasticTransitionTime, &out.LastElasticTransitionTime
+		*out = (*in).DeepCopy()
+	}
+	if in.LastResizeCompletedTime != nil {
+		in, out := &in.LastResizeCompletedTime, &out.LastResizeCompletedTime
+		*out = (*in).DeepCopy()
+	}
+}
+
+func (in *ElasticityStatus) DeepCopy() *ElasticityStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(ElasticityStatus)
 	in.DeepCopyInto(out)
 	return out
 }

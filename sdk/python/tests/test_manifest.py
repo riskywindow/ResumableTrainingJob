@@ -220,5 +220,127 @@ class Phase8DeviceProfileTests(unittest.TestCase):
             self.assertIn(key, payload, f"missing key: {key}")
 
 
+class Phase9ElasticityMetadataTests(unittest.TestCase):
+    """Tests for Phase 9 elasticity metadata in checkpoint manifests."""
+
+    def test_resize_fields_round_trip(self) -> None:
+        manifest = _base_manifest(
+            resize_active_worker_count=8,
+            resize_target_worker_count=4,
+            resize_direction="Shrink",
+            resize_reason="manual shrink from 8 to 4",
+            resize_in_place_shrink_supported=False,
+        )
+        encoded = manifest.to_json()
+        decoded = CheckpointManifest.from_json(encoded)
+
+        self.assertEqual(decoded.resize_active_worker_count, 8)
+        self.assertEqual(decoded.resize_target_worker_count, 4)
+        self.assertEqual(decoded.resize_direction, "Shrink")
+        self.assertEqual(decoded.resize_reason, "manual shrink from 8 to 4")
+        self.assertFalse(decoded.resize_in_place_shrink_supported)
+
+    def test_resize_fields_in_serialized_json(self) -> None:
+        manifest = _base_manifest(
+            resize_active_worker_count=4,
+            resize_target_worker_count=8,
+            resize_direction="Grow",
+            resize_reason="operator scale-up",
+            resize_in_place_shrink_supported=False,
+        )
+        payload = manifest.to_dict()
+
+        self.assertEqual(payload["resizeActiveWorkerCount"], 4)
+        self.assertEqual(payload["resizeTargetWorkerCount"], 8)
+        self.assertEqual(payload["resizeDirection"], "Grow")
+        self.assertEqual(payload["resizeReason"], "operator scale-up")
+        self.assertFalse(payload["resizeInPlaceShrinkSupported"])
+
+    def test_resize_fields_omitted_when_none(self) -> None:
+        manifest = _base_manifest()
+        payload = manifest.to_dict()
+
+        self.assertNotIn("resizeActiveWorkerCount", payload)
+        self.assertNotIn("resizeTargetWorkerCount", payload)
+        self.assertNotIn("resizeDirection", payload)
+        self.assertNotIn("resizeReason", payload)
+        self.assertNotIn("resizeInPlaceShrinkSupported", payload)
+
+    def test_phase8_manifest_without_phase9_fields_decodes(self) -> None:
+        """A Phase 8 manifest with no Phase 9 fields should decode with None defaults."""
+        manifest = _base_manifest(
+            device_profile_fingerprint="phase8-fp",
+        )
+        payload = manifest.to_dict()
+        # Simulate Phase 8: ensure no resize keys.
+        for key in ("resizeActiveWorkerCount", "resizeTargetWorkerCount",
+                     "resizeDirection", "resizeReason", "resizeInPlaceShrinkSupported"):
+            payload.pop(key, None)
+        raw = json.dumps(payload, indent=2, sort_keys=True)
+
+        decoded = CheckpointManifest.from_json(raw)
+        self.assertIsNone(decoded.resize_active_worker_count)
+        self.assertIsNone(decoded.resize_target_worker_count)
+        self.assertIsNone(decoded.resize_direction)
+        self.assertIsNone(decoded.resize_reason)
+        self.assertIsNone(decoded.resize_in_place_shrink_supported)
+        # Phase 8 field preserved.
+        self.assertEqual(decoded.device_profile_fingerprint, "phase8-fp")
+
+    def test_resize_fields_coexist_with_phase3_and_phase8(self) -> None:
+        """Phase 9 resize fields coexist with Phase 3 and Phase 8 fields."""
+        manifest = _base_manifest(
+            leader_count=0,
+            worker_count=8,
+            checkpoint_format_version=CHECKPOINT_FORMAT_DCP_V1,
+            cross_size_restore_supported=True,
+            device_profile_fingerprint="fp-all-phases",
+            resize_active_worker_count=8,
+            resize_target_worker_count=4,
+            resize_direction="Shrink",
+            resize_reason="shrink test",
+            resize_in_place_shrink_supported=True,
+        )
+        payload = manifest.to_dict()
+
+        # Phase 3 fields.
+        self.assertIn("crossSizeRestoreSupported", payload)
+        # Phase 8 fields.
+        self.assertIn("deviceProfileFingerprint", payload)
+        # Phase 9 fields.
+        self.assertIn("resizeActiveWorkerCount", payload)
+        self.assertIn("resizeDirection", payload)
+
+    def test_resize_in_place_shrink_false_is_serialized(self) -> None:
+        manifest = _base_manifest(resize_in_place_shrink_supported=False)
+        payload = manifest.to_dict()
+        self.assertIn("resizeInPlaceShrinkSupported", payload)
+        self.assertFalse(payload["resizeInPlaceShrinkSupported"])
+
+    def test_manifest_completeness_with_all_phase9_fields(self) -> None:
+        """Manifest with all phases' fields validates successfully."""
+        manifest = _base_manifest(
+            leader_count=0,
+            worker_count=8,
+            checkpoint_format_version=CHECKPOINT_FORMAT_DCP_V1,
+            cross_size_restore_supported=True,
+            device_profile_fingerprint="full-fp",
+            resize_active_worker_count=8,
+            resize_target_worker_count=4,
+            resize_direction="Shrink",
+            resize_reason="full test",
+            resize_in_place_shrink_supported=False,
+        )
+        manifest.validate()
+        payload = manifest.to_dict()
+
+        phase9_keys = {
+            "resizeActiveWorkerCount", "resizeTargetWorkerCount",
+            "resizeDirection", "resizeReason", "resizeInPlaceShrinkSupported",
+        }
+        for key in phase9_keys:
+            self.assertIn(key, payload, f"missing key: {key}")
+
+
 if __name__ == "__main__":
     unittest.main()
