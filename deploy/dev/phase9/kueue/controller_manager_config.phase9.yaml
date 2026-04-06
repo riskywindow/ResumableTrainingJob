@@ -1,0 +1,76 @@
+# Kueue controller manager configuration for Phase 9.
+#
+# Extends the base RTJ config with waitForPodsReady (Phase 7) but without
+# DRA or provisioning additions. Phase 9 focuses on elastic resize —
+# the critical Kueue integration is the Workload.status.reclaimablePods
+# field, which requires NO special feature gate. Kueue reads
+# reclaimablePods unconditionally and releases quota accordingly.
+#
+# Key configuration for Phase 9:
+#   - RTJ external framework integration (Phase 2 baseline)
+#   - waitForPodsReady for resize-triggered relaunch failure detection
+#   - No cohort / fair sharing — single ClusterQueue is sufficient
+#     because reclaimablePods quota release is per-Workload
+#   - manageJobsWithoutQueueName: false (Phase 2 baseline)
+#
+# reclaimablePods SSA patching:
+#   The RTJ controller writes Workload.status.reclaimablePods via
+#   server-side apply (field manager: rtj-elastic-reclaim). This does
+#   NOT require any Kueue configuration — SSA field ownership is a
+#   standard Kubernetes API server feature. Kueue's reconciler reads
+#   the reclaimablePods field and adjusts quota accounting accordingly.
+#
+# See docs/phase9/dev-environment.md for the design rationale.
+apiVersion: config.kueue.x-k8s.io/v1beta1
+kind: Configuration
+health:
+  healthProbeBindAddress: :8081
+metrics:
+  bindAddress: :8443
+  enableClusterQueueResources: true
+webhook:
+  port: 9443
+leaderElection:
+  leaderElect: true
+  resourceName: c1f6bfd2.kueue.x-k8s.io
+controller:
+  groupKindConcurrency:
+    Job.batch: 5
+    Pod: 5
+    Workload.kueue.x-k8s.io: 5
+    LocalQueue.kueue.x-k8s.io: 1
+    ClusterQueue.kueue.x-k8s.io: 1
+    ResourceFlavor.kueue.x-k8s.io: 1
+clientConnection:
+  qps: 50
+  burst: 100
+manageJobsWithoutQueueName: false
+managedJobsNamespaceSelector:
+  matchLabels:
+    checkpoint-native.dev/kueue-managed: "true"
+# Phase 7 carry-forward: waitForPodsReady detects startup failures and
+# triggers recovery. Useful for resize-triggered relaunches that fail.
+waitForPodsReady:
+  enable: true
+  timeout: 120s
+  requeuingStrategy:
+    timestamp: Eviction
+    backoffLimitCount: 3
+    backoffBaseSeconds: 10
+    backoffMaxSeconds: 300
+integrations:
+  frameworks:
+    - "batch/job"
+    - "kubeflow.org/mpijob"
+    - "ray.io/rayjob"
+    - "ray.io/raycluster"
+    - "jobset.x-k8s.io/jobset"
+    - "kubeflow.org/paddlejob"
+    - "kubeflow.org/pytorchjob"
+    - "kubeflow.org/tfjob"
+    - "kubeflow.org/xgboostjob"
+    - "kubeflow.org/jaxjob"
+    - "trainer.kubeflow.org/trainjob"
+    - "workload.codeflare.dev/appwrapper"
+  externalFrameworks:
+    - ResumableTrainingJob.v1alpha1.training.checkpoint.example.io

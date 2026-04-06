@@ -48,6 +48,7 @@ PHASE6_TRAINER_IMAGE ?= $(PHASE5_TRAINER_IMAGE)
 .PHONY: phase8-submit phase8-pause phase8-resume
 .PHONY: phase8-inspect-dra phase8-inspect-kueue phase8-inspect-checkpoints
 .PHONY: e2e-phase8
+.PHONY: phase9-up phase9-down phase9-status phase9-load-images phase9-smoke phase9-profile
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -594,6 +595,10 @@ FAKE_PROVISIONER_IMAGE ?= fake-provisioner:dev
 PHASE8_RTJ_NAME ?= phase8-demo
 PHASE8_TRAINER_IMAGE ?= $(PHASE7_TRAINER_IMAGE)
 PHASE8_KIND_NODE_IMAGE ?= kindest/node:v1.33.0
+PHASE9_SHRINK_RTJ_NAME ?= phase9-elastic-a
+PHASE9_GROW_RTJ_NAME ?= phase9-elastic-b
+PHASE9_NONELASTIC_RTJ_NAME ?= phase9-fixed
+PHASE9_TRAINER_IMAGE ?= $(PHASE8_TRAINER_IMAGE)
 
 phase7-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
@@ -796,3 +801,81 @@ phase8-inspect-checkpoints:
 
 e2e-phase8:
 	RUN_KIND_E2E=1 PHASE8_TRAINER_IMAGE=$(PHASE8_TRAINER_IMAGE) go test ./test/e2e -run 'TestDRAQuotaAndAllocation|TestDRAResumeCompatibleProfile|TestDRAIncompatibleResumeRejection' -v -timeout 20m
+
+# ── Phase 9 targets ──────────────────────────────────────────────────
+#
+# phase9-up:          Create kind cluster, install base stack, then apply
+#                     Phase 9 elastic resize profile. Includes queue with
+#                     dynamic-reclaim quota sizing and RTJ external framework.
+# phase9-down:        Delete the kind cluster.
+# phase9-status:      Show cluster state including elastic queue profile,
+#                     quota allocation, and reclaimablePods configuration.
+# phase9-load-images: Load images into the Phase 9 cluster.
+# phase9-smoke:       Run Phase 9 infrastructure smoke test. Verifies:
+#                       - RTJ CRDs with elasticity fields
+#                       - Phase 9 Kueue profile is active
+#                       - Sample elastic RTJs validate (dry-run)
+#                       - Runtime fixture knobs are present in manifests
+#                       - reclaimablePods patching path is configured
+# phase9-profile:     Apply/re-apply Phase 9 profile on existing cluster.
+#
+# The Phase 9 profile exercises:
+#   G1: Manual target-based elastic resize (shrink and grow)
+#   G2: In-place shrink via reclaimablePods SSA patching
+#   G3: Grow via checkpoint-and-relaunch
+#   G4: Dynamic quota reclaim (RTJ A shrinks → RTJ B admitted)
+#   G5: Non-elastic fallback (Phase 8 behavior preserved)
+#   G6: Deterministic local dev/test profile
+#
+# Queue quota design:
+#   1250m CPU / 1280Mi memory — enough for one 4-worker RTJ but not two.
+#   After RTJ A shrinks 4→2, released quota admits RTJ B (2 workers).
+#
+# Sample RTJs in deploy/dev/phase9/samples/:
+#   rtj-elastic-shrink.yaml   — 4 workers, shrink to 2 via reclaimablePods
+#   rtj-elastic-grow.yaml     — 2 workers, grow to 4 via relaunch
+#   rtj-non-elastic.yaml      — 2 workers, no elasticity (backward compat)
+
+phase9-up:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/dev-up.sh
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/install-phase9-profile.sh
+
+phase9-down:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-down.sh
+
+phase9-status:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/status.sh
+	@echo
+	@echo "phase9 queues:"
+	@kubectl get clusterqueues.kueue.x-k8s.io phase9-cq --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@kubectl get localqueues.kueue.x-k8s.io -n $(DEV_NAMESPACE) phase9-training --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+	@echo "phase9 quota (dynamic reclaim):"
+	@kubectl get clusterqueues.kueue.x-k8s.io phase9-cq -o jsonpath='{.spec.resourceGroups[0].flavors[0].resources}' --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (not found)"
+	@echo
+	@echo
+	@echo "phase9 workloads:"
+	@kubectl get workloads.kueue.x-k8s.io -n $(DEV_NAMESPACE) --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+	@echo "phase9 RTJs:"
+	@kubectl get resumabletrainingjobs.training.checkpoint.example.io -n $(DEV_NAMESPACE) --context "kind-$(KIND_CLUSTER_NAME)" 2>/dev/null || echo "  (none)"
+	@echo
+
+phase9-load-images:
+	@set -euo pipefail; \
+	for image in $(IMAGES); do \
+		echo "loading $$image into kind cluster $(KIND_CLUSTER_NAME)"; \
+		kind load docker-image --name $(KIND_CLUSTER_NAME) "$$image"; \
+	done
+
+phase9-smoke:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/phase9-smoke.sh
+
+phase9-profile:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
+	  ./hack/dev/phase9-profile.sh

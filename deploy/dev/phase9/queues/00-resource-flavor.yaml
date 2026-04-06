@@ -1,0 +1,8 @@
+# Phase 9: ResourceFlavor for elastic resize queue.
+# Default flavor with no node affinity — uses whatever nodes kind provides.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: phase9-flavor
+  labels:
+    checkpoint-native.dev/profile: phase9-elastic
