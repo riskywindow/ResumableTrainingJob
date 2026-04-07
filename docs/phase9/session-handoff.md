@@ -603,19 +603,250 @@ Step 4: E2E resize scenario tests with the DDP fixture.
 
 ### Recommended next prompt
 
+See Session: 2026-04-06 (E2E Test Coverage) below.
+
+---
+
+## Session: 2026-04-06 (E2E Test Coverage)
+
+### Decisions made
+
+1. **Three strong deterministic tests over many shallow ones**: Each test
+   exercises one complete resize path end-to-end with explicit assertions
+   at every lifecycle stage.
+
+2. **In-place shrink tested via status fixture knob**: Since the production
+   controller's runtime-detection mechanism for `inPlaceShrinkSupported` is
+   not yet wired to the reconcile loop (reads from status circularly), the
+   shrink/reclaim test pre-patches the RTJ status subresource to set
+   `inPlaceShrinkSupported=true`. This is a legitimate fixture approach
+   that tests the in-place shrink codepath end-to-end.
+
+3. **Fallback test uses default DDP behavior**: `inPlaceShrinkSupported=false`
+   (the zero-value default) demonstrates that the controller correctly
+   falls back to checkpoint-and-relaunch when in-place is not available.
+
+4. **RTJ is the only Kueue-managed object**: All tests assert child JobSets
+   are plain runtime (Phase 2 invariant preserved).
+
+5. **Manual patches as core trigger**: All resize triggers use explicit
+   `kubectl patch` on spec (targetWorkerCount) and status (fixture knobs)
+   rather than sleeps, timers, or metric-driven autoscaling.
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `test/e2e/phase9_helpers_test.go` | Phase 9 view types, env setup, wait/get/patch helpers |
+| `test/e2e/elastic_shrink_reclaim_test.go` | `TestElasticShrinkDynamicReclaim` — in-place shrink + reclaimablePods + quota reclaim |
+| `test/e2e/elastic_grow_relaunch_test.go` | `TestElasticGrowViaRelaunch` — grow via checkpoint-and-relaunch |
+| `test/e2e/elastic_fallback_test.go` | `TestElasticFallbackShrinkViaRelaunch` — fallback shrink when in-place unsupported |
+| `test/e2e/testdata/phase9/rtj-elastic-shrink-4w.yaml` | 4-worker RTJ for shrink/reclaim test |
+| `test/e2e/testdata/phase9/rtj-elastic-queued-2w.yaml` | 2-worker RTJ (queued, admitted after reclaim) |
+| `test/e2e/testdata/phase9/rtj-elastic-grow-2w.yaml` | 2-worker RTJ for grow test |
+| `test/e2e/testdata/phase9/rtj-elastic-fallback-4w.yaml` | 4-worker RTJ for fallback test |
+| `docs/phase9/e2e.md` | E2E test documentation: what each test proves, deferred items |
+
+### Files changed
+
+| File | Changes |
+|---|---|
+| `Makefile` | Added `e2e-phase9` target and `.PHONY` entry |
+| `docs/phase9/session-handoff.md` | Added this session entry |
+
+### Tests run
+
+- `go vet ./test/e2e/...` — **clean** (all Phase 9 e2e files compile)
+- `go build ./...` — **clean**
+
+### New test functions
+
+| Function | File | Description |
+|---|---|---|
+| `TestElasticShrinkDynamicReclaim` | `elastic_shrink_reclaim_test.go` | In-place shrink → reclaimablePods → RTJ B admitted |
+| `TestElasticGrowViaRelaunch` | `elastic_grow_relaunch_test.go` | 2→4 workers via checkpoint-and-relaunch |
+| `TestElasticFallbackShrinkViaRelaunch` | `elastic_fallback_test.go` | 4→2 workers via relaunch when in-place unsupported |
+
+### New helper functions
+
+| Function | File | Description |
+|---|---|---|
+| `setupPhase9Env()` | `phase9_helpers_test.go` | Phase 9 env setup (cluster, minio, operator) |
+| `getPhase9RTJ()` | `phase9_helpers_test.go` | Get Phase 9 RTJ view |
+| `waitForPhase9RTJState()` | `phase9_helpers_test.go` | Wait for RTJ predicate |
+| `waitForPhase9Phase()` | `phase9_helpers_test.go` | Wait for specific phase |
+| `getPhase9Workload()` | `phase9_helpers_test.go` | Get Workload with reclaimablePods |
+| `findPhase9WorkloadOwnedBy()` | `phase9_helpers_test.go` | Find Workload by owner |
+| `waitForPhase9WorkloadAdmitted()` | `phase9_helpers_test.go` | Wait for admitted Workload |
+| `waitForPhase9WorkloadReclaimablePods()` | `phase9_helpers_test.go` | Wait for reclaimablePods |
+| `cleanupPhase9RTJ()` | `phase9_helpers_test.go` | Cleanup RTJ and child JobSets |
+| `hasPhase9Condition()` | `phase9_helpers_test.go` | Check condition presence |
+| `findPhase9Condition()` | `phase9_helpers_test.go` | Find condition by type |
+| `patchPhase9RTJStatus()` | `phase9_helpers_test.go` | Patch status subresource |
+| `patchPhase9RTJSpec()` | `phase9_helpers_test.go` | Patch spec |
+
+### Makefile targets added
+
+| Target | Description |
+|---|---|
+| `make e2e-phase9` | Run Phase 9 e2e tests |
+
+### What was NOT done (deliberately)
+
+- **No reclaim completion detection**: Tests verify reclaimablePods publish
+  but not surplus pod termination or reclaimablePods clearing.
+- **No multi-cluster resize tests**: Per hard boundary, single-cluster only.
+- **No DRA + elasticity coexistence test**: Phase 8 DRA tests remain
+  independent.
+- **No resize target change mid-operation test**: Deferred until the
+  controller handles this case.
+- **No elapsed time tracking test**: Deferred until metrics are implemented.
+- **No runtime detection wiring**: The `inPlaceShrinkSupported` detection
+  from runtime signals/annotations is not yet wired into the production
+  reconciler. The e2e test uses a status patch as fixture knob.
+
+### Recommended next prompt
+
+See Session: 2026-04-06 (MultiCluster Compatibility) below.
+
+---
+
+## Session: 2026-04-06 (MultiCluster Compatibility)
+
+### Decisions made
+
+1. **Manager suppression path already covers Phase 9**: The existing
+   `ShouldSuppressRuntime()` gate returns before the elastic plan evaluation
+   block, so no new suppression logic is needed. The manager NEVER evaluates
+   elastic plans, executes resize operations, publishes reclaimablePods, or
+   creates reclaim helper state for remote RTJs.
+
+2. **Elasticity status surfacing follows Phase 7/8 pattern**: A new
+   `remoteElasticitySummary` struct and `buildRemoteElasticitySummary()`
+   function extract worker-side elasticity state for structured logging on
+   the manager. `hasPhase9RemoteStatus()` detects Phase 9 fields using the
+   same pattern as `hasPhase7RemoteStatus()` and `hasPhase8RemoteStatus()`.
+
+3. **Worker mode is unchanged**: The full Phase 9 elastic resize path runs
+   identically in worker mode whether or not the RTJ was dispatched by a
+   manager. reclaimablePods is published on the worker-local Workload only.
+
+4. **Manager-initiated resize target propagation is deferred**: The adapter's
+   spec-propagation mechanism handles `spec.elasticity.targetWorkerCount`
+   changes initiated on the manager side. Full testing of this flow is
+   deferred to the integration milestone.
+
+5. **Multi-cluster reclaimablePods mirroring remains deferred (OQ-3)**: The
+   reclaimablePods written by the worker to its local Workload are not
+   mirrored to the manager-side Workload. This is stretch work per the
+   original Phase 9 design.
+
+6. **Unit/integration tests use fake client for deterministic coverage**:
+   Nine new tests in `remote_status_test.go` cover Phase 9 remote status
+   building, detection, manager-mode integration with elastic worker status,
+   backward compatibility, and state transition reflection.
+
+7. **E2E smoke test requires Phase 6 infrastructure**: The multicluster
+   elastic smoke test (`TestMultiClusterElasticSmokeManagerSuppression`)
+   uses the existing Phase 6 multi-cluster setup to verify manager
+   suppression for elastic RTJs. Full resize execution over MultiKueue
+   is deferred.
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `docs/phase9/multicluster-compatibility.md` | What changes on workers, what stays the same on manager, test coverage, invariants, ownership table |
+| `test/e2e/multicluster_elastic_smoke_test.go` | `TestMultiClusterElasticSmokeManagerSuppression` — manager suppression for elastic RTJs via MultiKueue |
+| `test/e2e/testdata/phase9/rtj-multicluster-elastic-smoke.yaml` | Elastic RTJ template for multicluster smoke test |
+
+### Files changed
+
+| File | Changes |
+|---|---|
+| `internal/controller/remote_status.go` | Added `remoteElasticitySummary`, `buildRemoteElasticitySummary()`, `hasPhase9RemoteStatus()` |
+| `internal/controller/remote_status_test.go` | Added 9 tests: 3 unit tests for summary building/detection, 6 integration tests for manager mode with Phase 9 worker status |
+| `internal/controller/resumabletrainingjob_controller.go` | Added Phase 9 multicluster compatibility comment block; added Phase 9 elasticity logging in `reconcileManagerIntent()` |
+| `docs/phase9/session-handoff.md` | Added this session entry |
+
+### Tests run
+
+- `go build ./...` — **clean**
+- `go vet ./test/e2e/...` — **clean**
+- `go test ./internal/controller/... -count=1` — **all pass** (no regressions)
+- `go test ./internal/controller/... -run 'Phase9|Elastic|RemoteElasticity' -v` — **all 36+ tests pass**
+
+### New types
+
+| Type | Package | Description |
+|---|---|---|
+| `remoteElasticitySummary` | `controller` | Phase 9 elasticity state for manager-side observability (8 fields) |
+
+### New functions
+
+| Function | Package | Description |
+|---|---|---|
+| `buildRemoteElasticitySummary()` | `controller` | Extract Phase 9 summary from mirrored status |
+| `hasPhase9RemoteStatus()` | `controller` | Detect Phase 9 fields in mirrored status |
+
+### New test functions
+
+| Function | File | Description |
+|---|---|---|
+| `TestBuildRemoteElasticitySummaryFullState` | `remote_status_test.go` | All Phase 9 fields populated |
+| `TestBuildRemoteElasticitySummaryEmptyStatus` | `remote_status_test.go` | No Phase 9 fields (Phase 8 worker) |
+| `TestBuildRemoteElasticitySummaryCheckpointAndRelaunch` | `remote_status_test.go` | Grow via C&R scenario |
+| `TestHasPhase9RemoteStatus` | `remote_status_test.go` | Table-driven detection test |
+| `TestManagerModeReflectsPhase9WorkerElasticStatus` | `remote_status_test.go` | In-place shrink state from worker |
+| `TestManagerModeReflectsPhase9WorkerGrowResize` | `remote_status_test.go` | Grow-via-relaunch state from worker |
+| `TestManagerModePhase8WorkerHasNoPhase9Fields` | `remote_status_test.go` | Backward compat |
+| `TestManagerModeDoesNotExecuteElasticResize` | `remote_status_test.go` | Elastic spec on manager does not trigger resize |
+| `TestManagerModeResizeStateTransitionReflected` | `remote_status_test.go` | State transitions reflected correctly |
+| `TestMultiClusterElasticSmokeManagerSuppression` | `multicluster_elastic_smoke_test.go` | E2E: elastic RTJ via MultiKueue |
+
+### New invariants
+
+| ID | Invariant |
+|---|---|
+| I-12 | Manager never evaluates elastic plans for remote RTJs |
+| I-13 | reclaimablePods is published only on the executing worker-side Workload |
+| I-14 | Manager never creates reclaim helper state for remote RTJs |
+
+### What was NOT done (deliberately)
+
+- **No full multi-cluster resize execution test**: Requires combined Phase 6 +
+  Phase 9 infrastructure setup. The unit/integration tests verify the
+  controller behavior deterministically; the e2e smoke test verifies dispatch
+  and suppression.
+- **No multi-cluster reclaimablePods mirroring (OQ-3)**: Deferred per original
+  Phase 9 design. reclaimablePods are worker-local.
+- **No manager-initiated resize propagation test**: The adapter handles spec
+  propagation; testing the full round-trip requires a running adapter.
+- **No cross-cluster resize failover**: Worker switch during resize is an
+  advanced scenario requiring future work.
+- **No combined DRA + elasticity multicluster test**: Each is independently
+  compatible; combined testing is a future milestone.
+
+### Recommended next prompt
+
 ```
 You are working on Phase 9 only for the checkpoint-native preemption controller repo.
 
-Mission: Implement reclaim completion detection and resize lifecycle finalization.
+Mission: Wire runtime in-place shrink detection and implement reclaim
+completion detection.
 
-Prerequisites: make phase9-up && make phase9-smoke (verify profile is active).
+Read docs/phase9/e2e.md for what the e2e tests cover and what is deferred.
+Read internal/controller/elastic_plan.go for the current detection gap.
+Read internal/controller/elastic_execute.go for the execution model.
 
-Read docs/phase9/resize-execution.md for the execution model.
-Read docs/phase9/dev-environment.md for the dev environment design.
-Read internal/controller/elastic_execute.go for the current implementation.
+Step 1: Wire inPlaceShrinkSupported detection from the child JobSet annotation
+  or resize signal file into the main reconcile loop.
 
-Step 1: Detect in-place shrink completion.
-Step 2: Add elapsed time tracking for resize operations.
-Step 3: Handle resize target changes during in-progress operations.
-Step 4: E2E resize scenario tests with the DDP fixture.
+Step 2: Detect in-place shrink completion: when ReclaimPublished and the
+  active JobSet's worker pod count matches the target, clear reclaimablePods
+  on the Workload and mark resizeState=Completed.
+
+Step 3: Add elapsed time tracking for resize operations.
+
+Step 4: Handle resize target changes during in-progress operations.
 ```

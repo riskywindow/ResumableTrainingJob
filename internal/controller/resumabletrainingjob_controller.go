@@ -126,6 +126,19 @@ func (r *ResumableTrainingJobReconciler) Reconcile(ctx context.Context, req ctrl
 	//   - Worker mode: the full Phase 8 DRA path runs unchanged. Template
 	//     reconciliation, claim injection, and status observation all apply
 	//     identically to single-cluster mode.
+	//
+	// Phase 9 multi-cluster compatibility:
+	//   - Manager mode: suppression returns before the elastic plan evaluation
+	//     block (line ~212), so the manager NEVER evaluates elastic plans,
+	//     executes resize operations, publishes reclaimablePods, or creates
+	//     reclaim helper state for remote RTJs. Worker-side elasticity status
+	//     (elasticity.*) is surfaced transparently via the adapter's full-
+	//     status mirror and logged in reconcileManagerIntent().
+	//   - Worker mode: the full Phase 9 elastic resize path runs unchanged.
+	//     Plan evaluation, in-place shrink via reclaimablePods, checkpoint-
+	//     and-relaunch grow/shrink, and resize completion detection all apply
+	//     identically to single-cluster mode. The worker publishes
+	//     reclaimablePods on the worker-local Workload only.
 	if ShouldSuppressRuntime(r.Mode, &job) {
 		return r.reconcileManagerIntent(ctx, &job)
 	}
@@ -553,6 +566,26 @@ func (r *ResumableTrainingJobReconciler) reconcileManagerIntent(
 			"remoteClaimAllocationState", draSummary.ClaimAllocationState,
 			"remoteAllocatedClaimCount", draSummary.AllocatedClaimCount,
 			"remoteRequestedDeviceClasses", draSummary.RequestedDeviceClasses,
+		)
+	}
+
+	// Phase 9: log worker-side elasticity/resize status when the adapter
+	// has mirrored Phase 9 fields. The manager does NOT evaluate elastic
+	// plans, execute resize operations, or publish reclaimablePods for
+	// remote RTJs — all resize execution is worker-local. This is
+	// observability only: operators can see remote resize state, reclaim
+	// progress, and execution mode from the manager cluster's logs.
+	if hasRemoteStatusSignal(job) && hasPhase9RemoteStatus(job) {
+		elasticitySummary := buildRemoteElasticitySummary(job)
+		logger.Info("manager mode: remote Phase 9 elasticity status (from worker)",
+			"remoteResizeState", elasticitySummary.ResizeState,
+			"remoteResizePath", elasticitySummary.ResizePath,
+			"remoteTargetWorkers", elasticitySummary.TargetWorkerCount,
+			"remoteActiveWorkers", elasticitySummary.ActiveWorkerCount,
+			"remoteAdmittedWorkers", elasticitySummary.AdmittedWorkerCount,
+			"remoteReclaimablePodsPublished", elasticitySummary.ReclaimablePodsPublished,
+			"remoteInPlaceShrinkSupported", elasticitySummary.InPlaceShrinkSupported,
+			"remoteExecutionMode", elasticitySummary.CurrentExecutionMode,
 		)
 	}
 

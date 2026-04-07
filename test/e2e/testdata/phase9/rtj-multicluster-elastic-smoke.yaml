@@ -1,0 +1,118 @@
+# Phase 9 multicluster smoke test: elastic RTJ for MultiKueue dispatch.
+#
+# Submitted to the manager cluster. MultiKueue dispatches to a worker
+# cluster. The test verifies:
+#   1. Manager suppresses local runtime for elastic RTJs.
+#   2. Worker executes the elastic RTJ normally.
+#   3. Manager reflects worker-side elasticity status.
+#
+# Based on the Phase 6 remote dispatch template with Phase 9 elasticity
+# fields added.
+#
+# Placeholders:
+#   __RTJ_NAME__      -> unique RTJ name
+#   __DEV_NAMESPACE__ -> target namespace (default: checkpoint-dev)
+#   __TRAINER_IMAGE__ -> trainer container image
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase6-training
+spec:
+  managedBy: kueue.x-k8s.io/multikueue
+  suspend: true
+  queueName: phase6-training
+  workloadPriorityClassName: phase6-default
+  control:
+    desiredState: Running
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: cpu-only
+  # Phase 9: elasticity configured for manual resize.
+  elasticity:
+    mode: Manual
+    targetWorkerCount: 2
+    inPlaceShrinkPolicy: IfSupported
+    reclaimMode: ReclaimablePods
+  parallelism:
+    minCount: 1
+    preferredCount: 4
+    allowWorldSizeChange: true
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3
+    allowWorldSizeChange: true
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: YIELD_SDK_ELASTICITY_MODE
+                            value: Manual
+                          - name: YIELD_SDK_SUPPORTS_IN_PLACE_SHRINK
+                            value: "false"
+                          - name: AWS_ACCESS_KEY_ID
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_ACCESS_KEY_ID
+                          - name: AWS_SECRET_ACCESS_KEY
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_SECRET_ACCESS_KEY
+                          - name: AWS_ENDPOINT_URL
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_ENDPOINT_URL
+                          - name: AWS_DEFAULT_REGION
+                            valueFrom:
+                              secretKeyRef:
+                                name: checkpoint-storage-credentials
+                                key: AWS_REGION
+                          - name: SLEEP_PER_STEP
+                            value: "5"
+                          - name: CHECKPOINT_EVERY
+                            value: "3"
+                          - name: TOTAL_STEPS
+                            value: "100"
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
