@@ -18,11 +18,56 @@ webhooks:
           - training.checkpoint.example.io
         apiVersions:
           - v1alpha1
+          - v1beta1
         operations:
           - CREATE
           - UPDATE
         resources:
           - resumabletrainingjobs
+    sideEffects: None
+  - name: mcheckpointprioritypolicy.kb.io
+    admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: webhook-service
+        namespace: system
+        path: /mutate-training-checkpoint-example-io-v1alpha1-checkpointprioritypolicy
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups:
+          - training.checkpoint.example.io
+        apiVersions:
+          - v1alpha1
+          - v1beta1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - checkpointprioritypolicies
+    sideEffects: None
+  - name: mresumerreadinesspolicy.kb.io
+    admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: webhook-service
+        namespace: system
+        path: /mutate-training-checkpoint-example-io-v1alpha1-resumereadinesspolicy
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups:
+          - training.checkpoint.example.io
+        apiVersions:
+          - v1alpha1
+          - v1beta1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - resumereadinesspolicies
     sideEffects: None
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -45,9 +90,54 @@ webhooks:
           - training.checkpoint.example.io
         apiVersions:
           - v1alpha1
+          - v1beta1
         operations:
           - CREATE
           - UPDATE
         resources:
           - resumabletrainingjobs
+    sideEffects: None
+  - name: vcheckpointprioritypolicy.kb.io
+    admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: webhook-service
+        namespace: system
+        path: /validate-training-checkpoint-example-io-v1alpha1-checkpointprioritypolicy
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups:
+          - training.checkpoint.example.io
+        apiVersions:
+          - v1alpha1
+          - v1beta1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - checkpointprioritypolicies
+    sideEffects: None
+  - name: vresumerreadinesspolicy.kb.io
+    admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: webhook-service
+        namespace: system
+        path: /validate-training-checkpoint-example-io-v1alpha1-resumereadinesspolicy
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups:
+          - training.checkpoint.example.io
+        apiVersions:
+          - v1alpha1
+          - v1beta1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - resumereadinesspolicies
     sideEffects: None

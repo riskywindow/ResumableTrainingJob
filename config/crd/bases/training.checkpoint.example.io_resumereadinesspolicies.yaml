@@ -12,117 +12,204 @@ spec:
     plural: resumereadinesspolicies
     singular: resumereadinesspolicy
     shortNames:
-      - rrp
+    - rrp
   scope: Cluster
+  conversion:
+    strategy: Webhook
+    webhook:
+      conversionReviewVersions:
+      - v1
+      clientConfig:
+        service:
+          name: webhook-service
+          namespace: system
+          path: /convert
   versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      additionalPrinterColumns:
-        - name: FailurePolicy
-          type: string
-          jsonPath: .spec.failurePolicy
-        - name: RequireComplete
-          type: boolean
-          jsonPath: .spec.requireCompleteCheckpoint
-        - name: AllowInitial
-          type: boolean
-          jsonPath: .spec.allowInitialLaunchWithoutCheckpoint
-        - name: Age
-          type: date
-          jsonPath: .metadata.creationTimestamp
-      schema:
-        openAPIV3Schema:
-          description: >-
-            ResumeReadinessPolicy is a cluster-scoped parameter object referenced
-            by Kueue AdmissionCheck resources to configure the ResumeReadiness
-            admission check controller.
-          type: object
-          properties:
-            apiVersion:
-              description: >-
-                APIVersion defines the versioned schema of this representation of
-                an object.
-              type: string
-            kind:
-              description: Kind is a string value representing the REST resource.
-              type: string
-            metadata:
-              type: object
-            spec:
-              description: >-
-                ResumeReadinessPolicySpec defines the policy for the
-                ResumeReadiness AdmissionCheck controller.
-              type: object
-              properties:
-                requireCompleteCheckpoint:
-                  description: >-
-                    Whether resume requires a complete checkpoint. Default: true.
-                  type: boolean
-                maxCheckpointAge:
-                  description: >-
-                    Maximum acceptable age for the latest checkpoint used in a resume.
-                    Zero means no age limit. Format: duration string (e.g., "1h", "30m").
-                  type: string
-                failurePolicy:
-                  description: >-
-                    Behavior when checkpoint store or catalog is unreachable.
-                    FailOpen allows the workload to proceed. FailClosed blocks
-                    until the check can be confirmed. Default: FailClosed.
-                  type: string
-                  enum:
-                    - FailOpen
-                    - FailClosed
-                allowInitialLaunchWithoutCheckpoint:
-                  description: >-
-                    Whether the first launch (no prior checkpoint) is allowed
-                    without checkpoint evidence. Default: true.
-                  type: boolean
-            status:
-              description: Observed state of the ResumeReadinessPolicy.
-              type: object
-              properties:
-                conditions:
-                  description: >-
-                    Conditions hold the latest available observations of the
-                    policy's current state.
-                  type: array
-                  items:
-                    type: object
-                    required:
-                      - lastTransitionTime
-                      - message
-                      - reason
-                      - status
-                      - type
-                    properties:
-                      lastTransitionTime:
-                        type: string
-                        format: date-time
-                      message:
-                        type: string
-                        maxLength: 32768
-                      observedGeneration:
-                        type: integer
-                        format: int64
-                        minimum: 0
-                      reason:
-                        type: string
-                        maxLength: 1024
-                        minLength: 1
-                        pattern: "^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$"
-                      status:
-                        type: string
-                        enum:
-                          - "True"
-                          - "False"
-                          - Unknown
-                      type:
-                        type: string
-                        maxLength: 316
-                        pattern: "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$"
-                  x-kubernetes-list-map-keys:
-                    - type
-                  x-kubernetes-list-type: map
+  - name: v1alpha1
+    served: true
+    storage: false
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: FailurePolicy
+      type: string
+      jsonPath: .spec.failurePolicy
+    - name: RequireComplete
+      type: boolean
+      jsonPath: .spec.requireCompleteCheckpoint
+    - name: AllowInitial
+      type: boolean
+      jsonPath: .spec.allowInitialLaunchWithoutCheckpoint
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp
+    schema:
+      openAPIV3Schema:
+        description: ResumeReadinessPolicy is a cluster-scoped parameter object referenced by Kueue AdmissionCheck resources to configure the ResumeReadiness admission check controller.
+        type: object
+        properties:
+          apiVersion:
+            description: APIVersion defines the versioned schema of this representation of an object.
+            type: string
+          kind:
+            description: Kind is a string value representing the REST resource.
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ResumeReadinessPolicySpec defines the policy for the ResumeReadiness AdmissionCheck controller.
+            type: object
+            properties:
+              requireCompleteCheckpoint:
+                description: 'Whether resume requires a complete checkpoint. Default: true.'
+                type: boolean
+              maxCheckpointAge:
+                description: 'Maximum acceptable age for the latest checkpoint used in a resume. Zero means no age limit. Format: duration string (e.g., "1h", "30m").'
+                type: string
+              failurePolicy:
+                description: 'Behavior when checkpoint store or catalog is unreachable. FailOpen allows the workload to proceed. FailClosed blocks until the check can be confirmed. Default: FailClosed.'
+                type: string
+                enum:
+                - FailOpen
+                - FailClosed
+              allowInitialLaunchWithoutCheckpoint:
+                description: 'Whether the first launch (no prior checkpoint) is allowed without checkpoint evidence. Default: true.'
+                type: boolean
+          status:
+            description: Observed state of the ResumeReadinessPolicy.
+            type: object
+            properties:
+              conditions:
+                description: Conditions hold the latest available observations of the policy's current state.
+                type: array
+                items:
+                  type: object
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  properties:
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                    message:
+                      type: string
+                      maxLength: 32768
+                    observedGeneration:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                    reason:
+                      type: string
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                    status:
+                      type: string
+                      enum:
+                      - 'True'
+                      - 'False'
+                      - Unknown
+                    type:
+                      type: string
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+  - name: v1beta1
+    served: true
+    storage: true
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: FailurePolicy
+      type: string
+      jsonPath: .spec.failurePolicy
+    - name: RequireComplete
+      type: boolean
+      jsonPath: .spec.requireCompleteCheckpoint
+    - name: AllowInitial
+      type: boolean
+      jsonPath: .spec.allowInitialLaunchWithoutCheckpoint
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp
+    schema:
+      openAPIV3Schema:
+        description: ResumeReadinessPolicy is a cluster-scoped parameter object referenced by Kueue AdmissionCheck resources to configure the ResumeReadiness admission check controller.
+        type: object
+        properties:
+          apiVersion:
+            description: APIVersion defines the versioned schema of this representation of an object.
+            type: string
+          kind:
+            description: Kind is a string value representing the REST resource.
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ResumeReadinessPolicySpec defines the policy for the ResumeReadiness AdmissionCheck controller.
+            type: object
+            properties:
+              requireCompleteCheckpoint:
+                description: 'Whether resume requires a complete checkpoint. Default: true.'
+                type: boolean
+              maxCheckpointAge:
+                description: 'Maximum acceptable age for the latest checkpoint used in a resume. Zero means no age limit. Format: duration string (e.g., "1h", "30m").'
+                type: string
+              failurePolicy:
+                description: 'Behavior when checkpoint store or catalog is unreachable. FailOpen allows the workload to proceed. FailClosed blocks until the check can be confirmed. Default: FailClosed.'
+                type: string
+                enum:
+                - FailOpen
+                - FailClosed
+              allowInitialLaunchWithoutCheckpoint:
+                description: 'Whether the first launch (no prior checkpoint) is allowed without checkpoint evidence. Default: true.'
+                type: boolean
+          status:
+            description: Observed state of the ResumeReadinessPolicy.
+            type: object
+            properties:
+              conditions:
+                description: Conditions hold the latest available observations of the policy's current state.
+                type: array
+                items:
+                  type: object
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  properties:
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                    message:
+                      type: string
+                      maxLength: 32768
+                    observedGeneration:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                    reason:
+                      type: string
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                    status:
+                      type: string
+                      enum:
+                      - 'True'
+                      - 'False'
+                      - Unknown
+                    type:
+                      type: string
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map

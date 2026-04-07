@@ -49,6 +49,8 @@ PHASE6_TRAINER_IMAGE ?= $(PHASE5_TRAINER_IMAGE)
 .PHONY: phase8-inspect-dra phase8-inspect-kueue phase8-inspect-checkpoints
 .PHONY: e2e-phase8
 .PHONY: phase9-up phase9-down phase9-status phase9-load-images phase9-smoke phase9-profile e2e-phase9
+.PHONY: phase9-submit phase9-shrink phase9-grow
+.PHONY: phase9-inspect-elastic phase9-inspect-workload phase9-inspect-checkpoints
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -882,3 +884,35 @@ phase9-profile:
 
 e2e-phase9:
 	RUN_KIND_E2E=1 PHASE9_TRAINER_IMAGE=$(PHASE9_TRAINER_IMAGE) go test ./test/e2e -run 'TestElasticShrinkDynamicReclaim|TestElasticGrowViaRelaunch|TestElasticFallbackShrinkViaRelaunch' -v -timeout 20m
+
+# ── Phase 9 demo / inspect targets ─────────────────────────────────
+#
+# phase9-submit:              Submit an elastic RTJ (4 workers, Manual mode).
+# phase9-shrink:              Shrink the elastic RTJ from 4 to 2 workers.
+# phase9-grow:                Grow the elastic RTJ from 2 to 4 workers.
+# phase9-inspect-elastic:     Inspect RTJ elasticity spec/status, Workload
+#                              reclaimablePods, ClusterQueue usage, active
+#                              vs target worker count.
+# phase9-inspect-workload:    Inspect RTJ + Workload status, admission,
+#                              reclaimablePods, conditions, queue usage.
+# phase9-inspect-checkpoints: Inspect checkpoint catalog, resize metadata,
+#                              world size history, selected checkpoint.
+# e2e-phase9:                 Run Phase 9 e2e tests.
+
+phase9-submit:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE9_SHRINK_RTJ_NAME=$(PHASE9_SHRINK_RTJ_NAME) PHASE9_TRAINER_IMAGE=$(PHASE9_TRAINER_IMAGE) ./hack/dev/phase9-submit-elastic.sh
+
+phase9-shrink:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE9_SHRINK_RTJ_NAME=$(PHASE9_SHRINK_RTJ_NAME) ./hack/dev/phase9-shrink.sh
+
+phase9-grow:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE9_GROW_RTJ_NAME=$(PHASE9_GROW_RTJ_NAME) ./hack/dev/phase9-grow.sh
+
+phase9-inspect-elastic:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE9_SHRINK_RTJ_NAME=$(PHASE9_SHRINK_RTJ_NAME) ./hack/dev/phase9-inspect-elastic.sh
+
+phase9-inspect-workload:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE9_SHRINK_RTJ_NAME=$(PHASE9_SHRINK_RTJ_NAME) ./hack/dev/phase9-inspect-workload.sh
+
+phase9-inspect-checkpoints:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) PHASE9_SHRINK_RTJ_NAME=$(PHASE9_SHRINK_RTJ_NAME) ./hack/dev/phase9-inspect-checkpoints.sh

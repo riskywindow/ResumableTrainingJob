@@ -1,2 +1,4 @@
 resources:
   - bases/training.checkpoint.example.io_resumabletrainingjobs.yaml
+  - bases/training.checkpoint.example.io_checkpointprioritypolicies.yaml
+  - bases/training.checkpoint.example.io_resumereadinesspolicies.yaml

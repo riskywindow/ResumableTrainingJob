@@ -19,6 +19,7 @@ type Recorder struct {
 	workloads       map[string]workloadObservation
 	launchGateState map[string]string
 	deviceModeState map[string]string
+	resizeState     map[string]string
 }
 
 type workloadObservation struct {
@@ -603,6 +604,109 @@ var (
 			Help:      "Total DRA-backed launch failures (template not ready, claim injection error).",
 		},
 	)
+
+	// Phase 9 metrics.
+	rtjsByResizeState = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "rtjs_by_resize_state",
+			Help:      "Current ResumableTrainingJobs by resize state (Idle, Pending, InProgress, Blocked, Completed, Failed).",
+		},
+		[]string{"state"},
+	)
+	elasticActiveWorkers = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "elastic_active_workers",
+			Help:      "Current active (admitted) worker count per RTJ.",
+		},
+		[]string{"rtj"},
+	)
+	elasticTargetWorkers = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "elastic_target_workers",
+			Help:      "Current target worker count per RTJ.",
+		},
+		[]string{"rtj"},
+	)
+	elasticReclaimableWorkers = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "elastic_reclaimable_workers",
+			Help:      "Current reclaimable worker count per RTJ (workers pending release via reclaimablePods).",
+		},
+		[]string{"rtj"},
+	)
+	reclaimablePodsPublicationsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "reclaimable_pods_publications_total",
+			Help:      "Total reclaimablePods SSA patch writes to Workload.status.",
+		},
+	)
+	shrinkInPlaceSuccessesTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "shrink_in_place_successes_total",
+			Help:      "Total in-place shrink operations that completed successfully (reclaimablePods published).",
+		},
+	)
+	shrinkInPlaceFailuresTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "shrink_in_place_failures_total",
+			Help:      "Total in-place shrink operations that failed (SSA patch error).",
+		},
+	)
+	growViaRelaunchTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "grow_via_relaunch_total",
+			Help:      "Total grow-via-checkpoint-and-relaunch operations initiated.",
+		},
+	)
+	resizeFallbackRelaunchTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "resize_fallback_relaunch_total",
+			Help:      "Total shrink operations that fell back to checkpoint-and-relaunch because in-place shrink was not supported.",
+		},
+	)
+	resizeCheckpointCreationsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "resize_checkpoint_creations_total",
+			Help:      "Total checkpoint creations triggered by resize operations (both grow and fallback shrink).",
+		},
+	)
+	workloadStatusPatchFailuresTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "workload_status_patch_failures_total",
+			Help:      "Total failures patching Workload.status (reclaimablePods SSA patch conflicts or API errors).",
+		},
+	)
+	resizePlanEvaluationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "resize_plan_evaluations_total",
+			Help:      "Total elastic plan evaluations by plan kind.",
+		},
+		[]string{"kind"},
+	)
 )
 
 func NewRecorder() *Recorder {
@@ -682,12 +786,26 @@ func NewRecorder() *Recorder {
 			draResumeCompatibilityChecks,
 			draBackedLaunches,
 			draLaunchFailures,
+			// Phase 9
+			rtjsByResizeState,
+			elasticActiveWorkers,
+			elasticTargetWorkers,
+			elasticReclaimableWorkers,
+			reclaimablePodsPublicationsTotal,
+			shrinkInPlaceSuccessesTotal,
+			shrinkInPlaceFailuresTotal,
+			growViaRelaunchTotal,
+			resizeFallbackRelaunchTotal,
+			resizeCheckpointCreationsTotal,
+			workloadStatusPatchFailuresTotal,
+			resizePlanEvaluationsTotal,
 		)
 		recorder = &Recorder{
 			phases:          map[string]string{},
 			workloads:       map[string]workloadObservation{},
 			launchGateState: map[string]string{},
 			deviceModeState: map[string]string{},
+			resizeState:     map[string]string{},
 		}
 	})
 	return recorder
@@ -1299,5 +1417,128 @@ func (r *Recorder) IncDRABackedLaunch() {
 func (r *Recorder) IncDRALaunchFailure() {
 	if r != nil {
 		draLaunchFailures.Inc()
+	}
+}
+
+// Phase 9 recorder methods.
+
+// ObserveResizeState tracks the current RTJ's resize state gauge.
+func (r *Recorder) ObserveResizeState(rtjKey, state string) {
+	if r == nil || rtjKey == "" || state == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	previous, ok := r.resizeState[rtjKey]
+	if ok && previous == state {
+		return
+	}
+	if ok && previous != "" {
+		rtjsByResizeState.WithLabelValues(previous).Dec()
+	}
+	rtjsByResizeState.WithLabelValues(state).Inc()
+	r.resizeState[rtjKey] = state
+}
+
+// RemoveResizeState cleans up the resize state gauge for a removed RTJ.
+func (r *Recorder) RemoveResizeState(rtjKey string) {
+	if r == nil || rtjKey == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	previous, ok := r.resizeState[rtjKey]
+	if !ok || previous == "" {
+		return
+	}
+	rtjsByResizeState.WithLabelValues(previous).Dec()
+	delete(r.resizeState, rtjKey)
+}
+
+// SetElasticActiveWorkers records the current active worker count for an RTJ.
+func (r *Recorder) SetElasticActiveWorkers(rtjKey string, count int32) {
+	if r != nil && rtjKey != "" {
+		elasticActiveWorkers.WithLabelValues(rtjKey).Set(float64(count))
+	}
+}
+
+// SetElasticTargetWorkers records the current target worker count for an RTJ.
+func (r *Recorder) SetElasticTargetWorkers(rtjKey string, count int32) {
+	if r != nil && rtjKey != "" {
+		elasticTargetWorkers.WithLabelValues(rtjKey).Set(float64(count))
+	}
+}
+
+// SetElasticReclaimableWorkers records the reclaimable worker count for an RTJ.
+func (r *Recorder) SetElasticReclaimableWorkers(rtjKey string, count int32) {
+	if r != nil && rtjKey != "" {
+		elasticReclaimableWorkers.WithLabelValues(rtjKey).Set(float64(count))
+	}
+}
+
+// RemoveElasticWorkerMetrics cleans up all per-RTJ elastic worker gauges.
+func (r *Recorder) RemoveElasticWorkerMetrics(rtjKey string) {
+	if r != nil && rtjKey != "" {
+		elasticActiveWorkers.DeleteLabelValues(rtjKey)
+		elasticTargetWorkers.DeleteLabelValues(rtjKey)
+		elasticReclaimableWorkers.DeleteLabelValues(rtjKey)
+	}
+}
+
+// IncReclaimablePodsPublication records a reclaimablePods SSA patch write.
+func (r *Recorder) IncReclaimablePodsPublication() {
+	if r != nil {
+		reclaimablePodsPublicationsTotal.Inc()
+	}
+}
+
+// IncShrinkInPlaceSuccess records a successful in-place shrink operation.
+func (r *Recorder) IncShrinkInPlaceSuccess() {
+	if r != nil {
+		shrinkInPlaceSuccessesTotal.Inc()
+	}
+}
+
+// IncShrinkInPlaceFailure records a failed in-place shrink operation.
+func (r *Recorder) IncShrinkInPlaceFailure() {
+	if r != nil {
+		shrinkInPlaceFailuresTotal.Inc()
+	}
+}
+
+// IncGrowViaRelaunch records a grow-via-relaunch operation initiation.
+func (r *Recorder) IncGrowViaRelaunch() {
+	if r != nil {
+		growViaRelaunchTotal.Inc()
+	}
+}
+
+// IncResizeFallbackRelaunch records a shrink fallback to checkpoint-and-relaunch.
+func (r *Recorder) IncResizeFallbackRelaunch() {
+	if r != nil {
+		resizeFallbackRelaunchTotal.Inc()
+	}
+}
+
+// IncResizeCheckpointCreation records a checkpoint creation triggered by resize.
+func (r *Recorder) IncResizeCheckpointCreation() {
+	if r != nil {
+		resizeCheckpointCreationsTotal.Inc()
+	}
+}
+
+// IncWorkloadStatusPatchFailure records a Workload status patch failure.
+func (r *Recorder) IncWorkloadStatusPatchFailure() {
+	if r != nil {
+		workloadStatusPatchFailuresTotal.Inc()
+	}
+}
+
+// ObserveResizePlanEvaluation records an elastic plan evaluation by plan kind.
+func (r *Recorder) ObserveResizePlanEvaluation(kind string) {
+	if r != nil && kind != "" {
+		resizePlanEvaluationsTotal.WithLabelValues(kind).Inc()
 	}
 }
