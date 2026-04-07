@@ -334,6 +334,83 @@ func hasPhase8RemoteStatus(job *trainingv1alpha1.ResumableTrainingJob) bool {
 }
 
 // -------------------------------------------------------------------------
+// Phase 9: Remote elasticity summary
+// -------------------------------------------------------------------------
+//
+// When the Kueue adapter mirrors the worker's full .status to the manager
+// RTJ, Phase 9 status fields (elasticity.*) are included in the mirror.
+// The manager controller does NOT evaluate elastic plans, execute resize
+// operations, publish reclaimablePods, or create any reclaim helper state
+// for remote RTJs — these are entirely worker-side operations.
+//
+// buildRemoteElasticitySummary extracts key Phase 9 elasticity indicators
+// from the already-mirrored status for structured logging on the manager
+// side. This enables operators to observe worker-side resize state,
+// reclaim progress, and execution mode from the manager cluster's logs.
+
+// remoteElasticitySummary captures Phase 9 elasticity state extracted from
+// a manager-side RTJ whose status was mirrored from the worker by the
+// Kueue adapter. Used for manager-side observability, not for decision-making.
+type remoteElasticitySummary struct {
+	// ResizeState is the worker's resize state (Idle, Pending, InProgress,
+	// Blocked, Completed, Failed, or empty).
+	ResizeState string
+
+	// ResizePath is the worker's resize path (InPlace, CheckpointAndRelaunch,
+	// or empty).
+	ResizePath string
+
+	// TargetWorkerCount is the worker's current resize target.
+	TargetWorkerCount int32
+
+	// ActiveWorkerCount is the worker's observed active pod count.
+	ActiveWorkerCount int32
+
+	// AdmittedWorkerCount is the worker's current Kueue admission size.
+	AdmittedWorkerCount int32
+
+	// ReclaimablePodsPublished is true when the worker has written
+	// reclaimablePods to its local Workload for in-place shrink.
+	ReclaimablePodsPublished bool
+
+	// InPlaceShrinkSupported indicates whether the worker's runtime
+	// supports in-place shrink.
+	InPlaceShrinkSupported bool
+
+	// CurrentExecutionMode is the worker's execution mode (Fixed or Elastic).
+	CurrentExecutionMode string
+}
+
+// buildRemoteElasticitySummary extracts a Phase 9 elasticity summary from
+// the RTJ status. Returns zero values for any field not present (Phase 8
+// and earlier workers will have all fields empty).
+func buildRemoteElasticitySummary(job *trainingv1alpha1.ResumableTrainingJob) remoteElasticitySummary {
+	var summary remoteElasticitySummary
+	if job.Status.Elasticity == nil {
+		return summary
+	}
+	es := job.Status.Elasticity
+	summary.ResizeState = string(es.ResizeState)
+	summary.ResizePath = string(es.ResizePath)
+	summary.TargetWorkerCount = es.TargetWorkerCount
+	summary.ActiveWorkerCount = es.ActiveWorkerCount
+	summary.AdmittedWorkerCount = es.AdmittedWorkerCount
+	summary.ReclaimablePodsPublished = es.ReclaimablePodsPublished
+	summary.InPlaceShrinkSupported = es.InPlaceShrinkSupported
+	summary.CurrentExecutionMode = string(es.CurrentExecutionMode)
+	return summary
+}
+
+// hasPhase9RemoteStatus returns true when the mirrored status contains
+// Phase 9 elasticity status fields from the worker. This indicates the
+// worker is running with Phase 9 elasticity features active.
+func hasPhase9RemoteStatus(job *trainingv1alpha1.ResumableTrainingJob) bool {
+	return job.Status.Elasticity != nil &&
+		job.Status.Elasticity.CurrentExecutionMode != "" &&
+		job.Status.Elasticity.CurrentExecutionMode != trainingv1alpha1.ExecutionModeFixed
+}
+
+// -------------------------------------------------------------------------
 // Remote pause / resume helpers
 // -------------------------------------------------------------------------
 //

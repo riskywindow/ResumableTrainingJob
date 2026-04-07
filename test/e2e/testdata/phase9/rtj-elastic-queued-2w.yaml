@@ -1,0 +1,106 @@
+# Phase 9 e2e: 2-worker elastic RTJ that starts Queued (quota exhaustion).
+#
+# Used as "RTJ B" in the dynamic reclaim test. With 1250m total CPU quota
+# and RTJ A consuming 1000m (4 workers x 250m), this RTJ's 500m request
+# cannot be admitted. After RTJ A shrinks and publishes reclaimablePods,
+# the freed quota allows this RTJ to be admitted.
+#
+# Placeholders:
+#   __RTJ_NAME__         -> unique RTJ name
+#   __TRAINER_IMAGE__    -> trainer container image
+#   __DEV_NAMESPACE__    -> target namespace
+apiVersion: training.checkpoint.example.io/v1alpha1
+kind: ResumableTrainingJob
+metadata:
+  name: __RTJ_NAME__
+  namespace: __DEV_NAMESPACE__
+  labels:
+    kueue.x-k8s.io/queue-name: phase9-training
+spec:
+  suspend: true
+  queueName: phase9-training
+  elasticity:
+    mode: Manual
+    targetWorkerCount: 2
+    inPlaceShrinkPolicy: IfSupported
+    reclaimMode: ReclaimablePods
+  parallelism:
+    minCount: 1
+    preferredCount: 2
+    allowWorldSizeChange: true
+  identity:
+    worldSize: 2
+    image: __TRAINER_IMAGE__
+    codeVersion: "1"
+    gpuShape: virtual-gpu-v1
+  runtime:
+    mode: DDP
+    optimizerMode: sgd
+    shardingMode: none
+    template:
+      spec:
+        replicatedJobs:
+          - name: worker
+            replicas: 2
+            template:
+              spec:
+                parallelism: 1
+                completions: 1
+                backoffLimit: 0
+                template:
+                  metadata:
+                    labels:
+                      app.kubernetes.io/name: rtj-phase9-e2e
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: trainer
+                        image: __TRAINER_IMAGE__
+                        imagePullPolicy: IfNotPresent
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 256Mi
+                        env:
+                          - name: YIELD_SDK_STORAGE_URI
+                            value: s3://rtj-checkpoints
+                          - name: YIELD_SDK_CONTROL_FILE
+                            value: /yield/control/state
+                          - name: YIELD_SDK_ELASTICITY_MODE
+                            value: Manual
+                          - name: YIELD_SDK_SUPPORTS_IN_PLACE_SHRINK
+                            value: "false"
+                          - name: YIELD_SDK_RESIZE_SIGNAL_DIR
+                            value: /var/run/yield-sdk/resize
+                          - name: AWS_ACCESS_KEY_ID
+                            value: minioadmin
+                          - name: AWS_SECRET_ACCESS_KEY
+                            value: minioadmin123
+                          - name: AWS_ENDPOINT_URL
+                            value: http://minio.checkpoint-dev.svc.cluster.local:9000
+                          - name: AWS_DEFAULT_REGION
+                            value: us-east-1
+                          - name: SLEEP_PER_STEP
+                            value: "2"
+                          - name: CHECKPOINT_EVERY
+                            value: "3"
+                          - name: TOTAL_STEPS
+                            value: "200"
+                        volumeMounts:
+                          - name: control
+                            mountPath: /yield/control
+                          - name: resize-signal
+                            mountPath: /var/run/yield-sdk/resize
+                    volumes:
+                      - name: control
+                        emptyDir: {}
+                      - name: resize-signal
+                        emptyDir: {}
+  checkpoint:
+    storageURI: s3://rtj-checkpoints
+    interval: 15s
+    freshnessBudget: 1m
+    maxDrainTime: 30s
+  resume:
+    sourcePolicy: LatestCompatibleComplete
+    maxResumeRetries: 3

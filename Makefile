@@ -48,7 +48,7 @@ PHASE6_TRAINER_IMAGE ?= $(PHASE5_TRAINER_IMAGE)
 .PHONY: phase8-submit phase8-pause phase8-resume
 .PHONY: phase8-inspect-dra phase8-inspect-kueue phase8-inspect-checkpoints
 .PHONY: e2e-phase8
-.PHONY: phase9-up phase9-down phase9-status phase9-load-images phase9-smoke phase9-profile
+.PHONY: phase9-up phase9-down phase9-status phase9-load-images phase9-smoke phase9-profile e2e-phase9
 
 dev-up:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEV_NAMESPACE=$(DEV_NAMESPACE) ./hack/dev/dev-up.sh
@@ -879,3 +879,6 @@ phase9-profile:
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
 	  DEV_NAMESPACE=$(DEV_NAMESPACE) \
 	  ./hack/dev/phase9-profile.sh
+
+e2e-phase9:
+	RUN_KIND_E2E=1 PHASE9_TRAINER_IMAGE=$(PHASE9_TRAINER_IMAGE) go test ./test/e2e -run 'TestElasticShrinkDynamicReclaim|TestElasticGrowViaRelaunch|TestElasticFallbackShrinkViaRelaunch' -v -timeout 20m

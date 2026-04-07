@@ -1373,3 +1373,554 @@ func TestManagerModeDoesNotCreateResourceClaimTemplates(t *testing.T) {
 		t.Fatal("expected no Devices status on manager (templates not reconciled)")
 	}
 }
+
+// -------------------------------------------------------------------------
+// Phase 9: Remote elasticity summary unit tests
+// -------------------------------------------------------------------------
+
+func TestBuildRemoteElasticitySummaryFullState(t *testing.T) {
+	now := metav1.NewTime(time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC))
+	job := controllerTestRTJ()
+	job.Status.Elasticity = &trainingv1alpha1.ElasticityStatus{
+		ResizeState:              trainingv1alpha1.ResizeStateInProgress,
+		ResizePath:               trainingv1alpha1.ResizePathInPlace,
+		TargetWorkerCount:        2,
+		ActiveWorkerCount:        4,
+		AdmittedWorkerCount:      4,
+		ReclaimablePodsPublished: true,
+		InPlaceShrinkSupported:   true,
+		CurrentExecutionMode:     trainingv1alpha1.ExecutionModeElastic,
+		LastElasticTransitionTime: &now,
+	}
+
+	summary := buildRemoteElasticitySummary(job)
+
+	if summary.ResizeState != string(trainingv1alpha1.ResizeStateInProgress) {
+		t.Fatalf("expected ResizeState %q, got %q",
+			trainingv1alpha1.ResizeStateInProgress, summary.ResizeState)
+	}
+	if summary.ResizePath != string(trainingv1alpha1.ResizePathInPlace) {
+		t.Fatalf("expected ResizePath %q, got %q",
+			trainingv1alpha1.ResizePathInPlace, summary.ResizePath)
+	}
+	if summary.TargetWorkerCount != 2 {
+		t.Fatalf("expected TargetWorkerCount 2, got %d", summary.TargetWorkerCount)
+	}
+	if summary.ActiveWorkerCount != 4 {
+		t.Fatalf("expected ActiveWorkerCount 4, got %d", summary.ActiveWorkerCount)
+	}
+	if summary.AdmittedWorkerCount != 4 {
+		t.Fatalf("expected AdmittedWorkerCount 4, got %d", summary.AdmittedWorkerCount)
+	}
+	if !summary.ReclaimablePodsPublished {
+		t.Fatal("expected ReclaimablePodsPublished to be true")
+	}
+	if !summary.InPlaceShrinkSupported {
+		t.Fatal("expected InPlaceShrinkSupported to be true")
+	}
+	if summary.CurrentExecutionMode != string(trainingv1alpha1.ExecutionModeElastic) {
+		t.Fatalf("expected CurrentExecutionMode %q, got %q",
+			trainingv1alpha1.ExecutionModeElastic, summary.CurrentExecutionMode)
+	}
+}
+
+func TestBuildRemoteElasticitySummaryEmptyStatus(t *testing.T) {
+	// Phase 8 and earlier workers produce no elasticity status.
+	job := controllerTestRTJ()
+
+	summary := buildRemoteElasticitySummary(job)
+
+	if summary.ResizeState != "" {
+		t.Fatalf("expected empty ResizeState for non-elastic worker, got %q", summary.ResizeState)
+	}
+	if summary.ResizePath != "" {
+		t.Fatalf("expected empty ResizePath for non-elastic worker, got %q", summary.ResizePath)
+	}
+	if summary.TargetWorkerCount != 0 {
+		t.Fatalf("expected TargetWorkerCount 0 for non-elastic worker, got %d", summary.TargetWorkerCount)
+	}
+	if summary.CurrentExecutionMode != "" {
+		t.Fatalf("expected empty CurrentExecutionMode for non-elastic worker, got %q", summary.CurrentExecutionMode)
+	}
+}
+
+func TestBuildRemoteElasticitySummaryCheckpointAndRelaunch(t *testing.T) {
+	job := controllerTestRTJ()
+	job.Status.Elasticity = &trainingv1alpha1.ElasticityStatus{
+		ResizeState:          trainingv1alpha1.ResizeStateInProgress,
+		ResizePath:           trainingv1alpha1.ResizePathCheckpointAndRelaunch,
+		TargetWorkerCount:    4,
+		ActiveWorkerCount:    2,
+		AdmittedWorkerCount:  2,
+		CurrentExecutionMode: trainingv1alpha1.ExecutionModeElastic,
+	}
+
+	summary := buildRemoteElasticitySummary(job)
+
+	if summary.ResizePath != string(trainingv1alpha1.ResizePathCheckpointAndRelaunch) {
+		t.Fatalf("expected ResizePath %q, got %q",
+			trainingv1alpha1.ResizePathCheckpointAndRelaunch, summary.ResizePath)
+	}
+	if summary.ReclaimablePodsPublished {
+		t.Fatal("expected ReclaimablePodsPublished to be false for C&R path")
+	}
+	if summary.InPlaceShrinkSupported {
+		t.Fatal("expected InPlaceShrinkSupported to be false for C&R path")
+	}
+}
+
+func TestHasPhase9RemoteStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(*trainingv1alpha1.ResumableTrainingJob)
+		expected bool
+	}{
+		{
+			name:     "no elasticity status (Phase 8 worker)",
+			setup:    func(j *trainingv1alpha1.ResumableTrainingJob) {},
+			expected: false,
+		},
+		{
+			name: "elastic mode active",
+			setup: func(j *trainingv1alpha1.ResumableTrainingJob) {
+				j.Status.Elasticity = &trainingv1alpha1.ElasticityStatus{
+					CurrentExecutionMode: trainingv1alpha1.ExecutionModeElastic,
+				}
+			},
+			expected: true,
+		},
+		{
+			name: "fixed mode is not Phase 9 active",
+			setup: func(j *trainingv1alpha1.ResumableTrainingJob) {
+				j.Status.Elasticity = &trainingv1alpha1.ElasticityStatus{
+					CurrentExecutionMode: trainingv1alpha1.ExecutionModeFixed,
+				}
+			},
+			expected: false,
+		},
+		{
+			name: "empty execution mode is not Phase 9 active",
+			setup: func(j *trainingv1alpha1.ResumableTrainingJob) {
+				j.Status.Elasticity = &trainingv1alpha1.ElasticityStatus{
+					CurrentExecutionMode: "",
+				}
+			},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			job := controllerTestRTJ()
+			tc.setup(job)
+			got := hasPhase9RemoteStatus(job)
+			if got != tc.expected {
+				t.Fatalf("expected %v, got %v", tc.expected, got)
+			}
+		})
+	}
+}
+
+// -------------------------------------------------------------------------
+// Phase 9: Integration tests - manager mode with Phase 9 worker elasticity
+// -------------------------------------------------------------------------
+
+func TestManagerModeReflectsPhase9WorkerElasticStatus(t *testing.T) {
+	// Scenario: the adapter mirrors a worker RTJ that has Phase 9 elasticity
+	// active (elastic mode, in-place shrink in progress with reclaimablePods
+	// published). The manager must preserve the Phase 9 status fields and
+	// NOT evaluate elastic plans or execute resize operations locally.
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	now := metav1.NewTime(time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC))
+	rtj := controllerTestRTJ()
+	rtj.Spec.ManagedBy = trainingv1alpha1.MultiKueueControllerName
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.ObservedGeneration = rtj.Generation
+	// Worker is Running with elasticity active.
+	rtj.Status.Phase = trainingv1alpha1.PhaseRunning
+	rtj.Status.ActiveJobSetName = "counter-run-1"
+	rtj.Status.CurrentRunAttempt = 1
+	// Phase 9 elasticity status mirrored from worker.
+	rtj.Status.Elasticity = &trainingv1alpha1.ElasticityStatus{
+		ResizeState:              trainingv1alpha1.ResizeStateInProgress,
+		ResizePath:               trainingv1alpha1.ResizePathInPlace,
+		TargetWorkerCount:        2,
+		ActiveWorkerCount:        4,
+		AdmittedWorkerCount:      4,
+		DesiredWorkerCount:       4,
+		ReclaimablePodsPublished: true,
+		ReclaimableWorkerCount:   2,
+		InPlaceShrinkSupported:   true,
+		CurrentExecutionMode:     trainingv1alpha1.ExecutionModeElastic,
+		LastElasticTransitionTime: &now,
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj).
+		WithObjects(rtj).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{
+		Client:          c,
+		Scheme:          scheme,
+		Mode:            ModeManager,
+		Now:             func() metav1.Time { return now },
+		ClusterResolver: &remote.StaticClusterResolver{ClusterName: "worker-elastic-1"},
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, c.Get(ctx, req.NamespacedName, &updated))
+
+	// Manager must NOT create local runtime.
+	mc := updated.Status.MultiCluster
+	if mc == nil {
+		t.Fatal("expected MultiCluster status")
+	}
+	if !mc.LocalExecutionSuppressed {
+		t.Fatal("expected LocalExecutionSuppressed to be true")
+	}
+	if mc.DispatchPhase != trainingv1alpha1.DispatchPhaseActive {
+		t.Fatalf("expected dispatch phase %q, got %q",
+			trainingv1alpha1.DispatchPhaseActive, mc.DispatchPhase)
+	}
+	if mc.RemotePhase != trainingv1alpha1.PhaseRunning {
+		t.Fatalf("expected remote phase %q, got %q",
+			trainingv1alpha1.PhaseRunning, mc.RemotePhase)
+	}
+
+	// Phase 9 elasticity status survives the manager reconcile.
+	if updated.Status.Elasticity == nil {
+		t.Fatal("expected Phase 9 Elasticity to be preserved from worker mirror")
+	}
+	es := updated.Status.Elasticity
+	if es.CurrentExecutionMode != trainingv1alpha1.ExecutionModeElastic {
+		t.Fatalf("expected execution mode %q, got %q",
+			trainingv1alpha1.ExecutionModeElastic, es.CurrentExecutionMode)
+	}
+	if es.ResizeState != trainingv1alpha1.ResizeStateInProgress {
+		t.Fatalf("expected resize state %q, got %q",
+			trainingv1alpha1.ResizeStateInProgress, es.ResizeState)
+	}
+	if es.ResizePath != trainingv1alpha1.ResizePathInPlace {
+		t.Fatalf("expected resize path %q, got %q",
+			trainingv1alpha1.ResizePathInPlace, es.ResizePath)
+	}
+	if es.TargetWorkerCount != 2 {
+		t.Fatalf("expected target worker count 2, got %d", es.TargetWorkerCount)
+	}
+	if !es.ReclaimablePodsPublished {
+		t.Fatal("expected ReclaimablePodsPublished to be true")
+	}
+	if es.ReclaimableWorkerCount != 2 {
+		t.Fatalf("expected reclaimable worker count 2, got %d", es.ReclaimableWorkerCount)
+	}
+	if !es.InPlaceShrinkSupported {
+		t.Fatal("expected InPlaceShrinkSupported to be true")
+	}
+}
+
+func TestManagerModeReflectsPhase9WorkerGrowResize(t *testing.T) {
+	// Scenario: the adapter mirrors a worker RTJ that is growing via
+	// checkpoint-and-relaunch (Phase 9). The manager must reflect
+	// the grow state without attempting local resize execution.
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	now := metav1.NewTime(time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC))
+	rtj := controllerTestRTJ()
+	rtj.Spec.ManagedBy = trainingv1alpha1.MultiKueueControllerName
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.ObservedGeneration = rtj.Generation
+	// Worker is in resize-checkpointing state (Draining for grow).
+	rtj.Status.Phase = trainingv1alpha1.PhaseDraining
+	rtj.Status.ActiveJobSetName = "counter-run-1"
+	rtj.Status.CurrentRunAttempt = 1
+	// Phase 9 grow-via-relaunch in progress on worker.
+	rtj.Status.Elasticity = &trainingv1alpha1.ElasticityStatus{
+		ResizeState:          trainingv1alpha1.ResizeStateInProgress,
+		ResizePath:           trainingv1alpha1.ResizePathCheckpointAndRelaunch,
+		TargetWorkerCount:    4,
+		ActiveWorkerCount:    2,
+		AdmittedWorkerCount:  2,
+		DesiredWorkerCount:   4,
+		CurrentExecutionMode: trainingv1alpha1.ExecutionModeElastic,
+		ResizeReason:         "GrowViaRelaunchInProgress",
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj).
+		WithObjects(rtj).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{
+		Client:          c,
+		Scheme:          scheme,
+		Mode:            ModeManager,
+		Now:             func() metav1.Time { return now },
+		ClusterResolver: &remote.StaticClusterResolver{ClusterName: "worker-1"},
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, c.Get(ctx, req.NamespacedName, &updated))
+
+	mc := updated.Status.MultiCluster
+	if mc == nil {
+		t.Fatal("expected MultiCluster status")
+	}
+	if mc.DispatchPhase != trainingv1alpha1.DispatchPhaseActive {
+		t.Fatalf("expected dispatch phase %q, got %q",
+			trainingv1alpha1.DispatchPhaseActive, mc.DispatchPhase)
+	}
+	// Remote phase reflects worker's Draining state.
+	if mc.RemotePhase != trainingv1alpha1.PhaseDraining {
+		t.Fatalf("expected remote phase %q, got %q",
+			trainingv1alpha1.PhaseDraining, mc.RemotePhase)
+	}
+
+	// Phase 9 grow state preserved.
+	es := updated.Status.Elasticity
+	if es == nil {
+		t.Fatal("expected Phase 9 Elasticity to be preserved")
+	}
+	if es.ResizePath != trainingv1alpha1.ResizePathCheckpointAndRelaunch {
+		t.Fatalf("expected resize path %q, got %q",
+			trainingv1alpha1.ResizePathCheckpointAndRelaunch, es.ResizePath)
+	}
+	if es.TargetWorkerCount != 4 {
+		t.Fatalf("expected target worker count 4, got %d", es.TargetWorkerCount)
+	}
+	if es.AdmittedWorkerCount != 2 {
+		t.Fatalf("expected admitted worker count 2, got %d", es.AdmittedWorkerCount)
+	}
+}
+
+func TestManagerModePhase8WorkerHasNoPhase9Fields(t *testing.T) {
+	// Scenario: a Phase 8 worker (no elasticity features) mirrors status.
+	// The manager must still work correctly with no Phase 9 status fields.
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	now := metav1.NewTime(time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC))
+	rtj := controllerTestRTJ()
+	rtj.Spec.ManagedBy = trainingv1alpha1.MultiKueueControllerName
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.ObservedGeneration = rtj.Generation
+	// Phase 8 worker: Running, no Phase 9 fields.
+	rtj.Status.Phase = trainingv1alpha1.PhaseRunning
+	rtj.Status.ActiveJobSetName = "counter-run-1"
+	rtj.Status.CurrentRunAttempt = 1
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj).
+		WithObjects(rtj).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{
+		Client:          c,
+		Scheme:          scheme,
+		Mode:            ModeManager,
+		Now:             func() metav1.Time { return now },
+		ClusterResolver: &remote.StaticClusterResolver{ClusterName: "worker-1"},
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, c.Get(ctx, req.NamespacedName, &updated))
+
+	mc := updated.Status.MultiCluster
+	if mc == nil {
+		t.Fatal("expected MultiCluster status")
+	}
+	if mc.DispatchPhase != trainingv1alpha1.DispatchPhaseActive {
+		t.Fatalf("expected dispatch phase %q, got %q",
+			trainingv1alpha1.DispatchPhaseActive, mc.DispatchPhase)
+	}
+
+	// No Phase 9 fields should be present from a Phase 8 worker.
+	if updated.Status.Elasticity != nil {
+		t.Fatal("expected no Elasticity from Phase 8 worker")
+	}
+
+	// hasPhase9RemoteStatus should be false.
+	if hasPhase9RemoteStatus(&updated) {
+		t.Fatal("expected hasPhase9RemoteStatus=false for Phase 8 worker")
+	}
+}
+
+func TestManagerModeDoesNotExecuteElasticResize(t *testing.T) {
+	// Scenario: an elastic RTJ with spec.elasticity is submitted to the
+	// manager. The manager must NOT evaluate elastic plans, execute resize
+	// operations, or publish reclaimablePods — even though the RTJ spec
+	// includes elastic resize configuration. All resize execution is
+	// worker-side only.
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	now := metav1.NewTime(time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC))
+	targetCount := int32(2)
+	rtj := controllerTestRTJ()
+	rtj.Spec.ManagedBy = trainingv1alpha1.MultiKueueControllerName
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.ObservedGeneration = rtj.Generation
+	// Spec includes elastic resize configuration.
+	rtj.Spec.Elasticity = &trainingv1alpha1.ElasticitySpec{
+		Mode:                trainingv1alpha1.ElasticityModeManual,
+		TargetWorkerCount:   &targetCount,
+		InPlaceShrinkPolicy: trainingv1alpha1.InPlaceShrinkPolicyIfSupported,
+		ReclaimMode:         trainingv1alpha1.ReclaimModeReclaimablePods,
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj).
+		WithObjects(rtj).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{
+		Client:          c,
+		Scheme:          scheme,
+		Mode:            ModeManager,
+		Now:             func() metav1.Time { return now },
+		ClusterResolver: &remote.StaticClusterResolver{ClusterName: "worker-1"},
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	// Run several reconciles to be sure.
+	for i := 0; i < 5; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile %d failed: %v", i+1, err)
+		}
+	}
+
+	var updated trainingv1alpha1.ResumableTrainingJob
+	must(t, c.Get(ctx, req.NamespacedName, &updated))
+
+	// Manager must suppress local execution.
+	mc := updated.Status.MultiCluster
+	if mc == nil {
+		t.Fatal("expected MultiCluster status")
+	}
+	if !mc.LocalExecutionSuppressed {
+		t.Fatal("expected LocalExecutionSuppressed to be true")
+	}
+
+	// Manager must NOT have created elasticity status (that's worker's job).
+	// The controller only populates status.elasticity when running the
+	// worker-side elastic plan evaluation, which is suppressed in manager mode.
+	if updated.Status.Elasticity != nil {
+		t.Fatal("expected no Elasticity status on manager (elastic plan not evaluated)")
+	}
+}
+
+func TestManagerModeResizeStateTransitionReflected(t *testing.T) {
+	// Scenario: simulate a resize state transition on the worker by running
+	// two reconciles with different mirrored elasticity states. Verify that
+	// the manager reflects each state correctly without modifying them.
+	scheme := runtime.NewScheme()
+	must(t, clientgoscheme.AddToScheme(scheme))
+	must(t, trainingv1alpha1.AddToScheme(scheme))
+	must(t, kueuev1beta2.AddToScheme(scheme))
+
+	now := metav1.NewTime(time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC))
+	rtj := controllerTestRTJ()
+	rtj.Spec.ManagedBy = trainingv1alpha1.MultiKueueControllerName
+	rtj.Finalizers = []string{resumableTrainingJobFinalizer}
+	rtj.Status.ObservedGeneration = rtj.Generation
+	rtj.Status.Phase = trainingv1alpha1.PhaseRunning
+	rtj.Status.ActiveJobSetName = "counter-run-1"
+	rtj.Status.CurrentRunAttempt = 1
+	// Step 1: Worker reports InProgress shrink.
+	rtj.Status.Elasticity = &trainingv1alpha1.ElasticityStatus{
+		ResizeState:          trainingv1alpha1.ResizeStateInProgress,
+		ResizePath:           trainingv1alpha1.ResizePathInPlace,
+		TargetWorkerCount:    2,
+		AdmittedWorkerCount:  4,
+		CurrentExecutionMode: trainingv1alpha1.ExecutionModeElastic,
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(rtj).
+		WithObjects(rtj).
+		Build()
+
+	reconciler := &ResumableTrainingJobReconciler{
+		Client:          c,
+		Scheme:          scheme,
+		Mode:            ModeManager,
+		Now:             func() metav1.Time { return now },
+		ClusterResolver: &remote.StaticClusterResolver{ClusterName: "worker-1"},
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rtj.Name, Namespace: rtj.Namespace}}
+	ctx := context.Background()
+
+	// First reconcile: InProgress.
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile 1 failed: %v", err)
+	}
+
+	var step1 trainingv1alpha1.ResumableTrainingJob
+	must(t, c.Get(ctx, req.NamespacedName, &step1))
+	if step1.Status.Elasticity == nil || step1.Status.Elasticity.ResizeState != trainingv1alpha1.ResizeStateInProgress {
+		t.Fatal("expected resize state InProgress after step 1")
+	}
+
+	// Step 2: Simulate adapter mirroring Completed state from worker.
+	completedNow := metav1.NewTime(time.Date(2026, 4, 6, 10, 5, 0, 0, time.UTC))
+	step1.Status.Elasticity.ResizeState = trainingv1alpha1.ResizeStateCompleted
+	step1.Status.Elasticity.ResizePath = ""
+	step1.Status.Elasticity.AdmittedWorkerCount = 2
+	step1.Status.Elasticity.ActiveWorkerCount = 2
+	step1.Status.Elasticity.LastResizeCompletedTime = &completedNow
+	must(t, c.Status().Update(ctx, &step1))
+
+	// Second reconcile: Completed.
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile 2 failed: %v", err)
+	}
+
+	var step2 trainingv1alpha1.ResumableTrainingJob
+	must(t, c.Get(ctx, req.NamespacedName, &step2))
+	if step2.Status.Elasticity == nil {
+		t.Fatal("expected Elasticity to be present after step 2")
+	}
+	if step2.Status.Elasticity.ResizeState != trainingv1alpha1.ResizeStateCompleted {
+		t.Fatalf("expected resize state %q after step 2, got %q",
+			trainingv1alpha1.ResizeStateCompleted, step2.Status.Elasticity.ResizeState)
+	}
+	if step2.Status.Elasticity.AdmittedWorkerCount != 2 {
+		t.Fatalf("expected admitted worker count 2 after step 2, got %d",
+			step2.Status.Elasticity.AdmittedWorkerCount)
+	}
+}
