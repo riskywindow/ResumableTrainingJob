@@ -1,0 +1,251 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rtj-operator.fullname" . }}-manager
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - resumabletrainingjobs
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - resumabletrainingjobs/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - resumabletrainingjobs/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+  - apiGroups:
+      - jobset.x-k8s.io
+    resources:
+      - jobsets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - scheduling.k8s.io
+    resources:
+      - priorityclasses
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - workloads
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - workloads/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - workloads/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - resourceflavors
+      - workloadpriorityclasses
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - admissionchecks
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - admissionchecks/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - resumereadinesspolicies
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - resumereadinesspolicies/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - checkpointprioritypolicies
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - training.checkpoint.example.io
+    resources:
+      - checkpointprioritypolicies/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "rtj-operator.fullname" . }}-manager
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "rtj-operator.fullname" . }}-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rtj-operator.serviceAccountName" . }}
+    namespace: {{ include "rtj-operator.namespace" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rtj-operator.fullname" . }}-leader-election
+  namespace: {{ include "rtj-operator.namespace" . }}
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rtj-operator.fullname" . }}-leader-election
+  namespace: {{ include "rtj-operator.namespace" . }}
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rtj-operator.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rtj-operator.serviceAccountName" . }}
+    namespace: {{ include "rtj-operator.namespace" . }}
+---
+# User-facing ClusterRoles for RTJ tenancy.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rtj-operator.fullname" . }}-rtj-editor
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules:
+  - apiGroups: ["training.checkpoint.example.io"]
+    resources: ["resumabletrainingjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["training.checkpoint.example.io"]
+    resources: ["resumabletrainingjobs/status"]
+    verbs: ["get"]
+  - apiGroups: ["training.checkpoint.example.io"]
+    resources: ["checkpointprioritypolicies", "resumereadinesspolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rtj-operator.fullname" . }}-rtj-viewer
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: ["training.checkpoint.example.io"]
+    resources:
+      - resumabletrainingjobs
+      - resumabletrainingjobs/status
+      - checkpointprioritypolicies
+      - checkpointprioritypolicies/status
+      - resumereadinesspolicies
+      - resumereadinesspolicies/status
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads", "workloads/status"]
+    verbs: ["get", "list", "watch"]

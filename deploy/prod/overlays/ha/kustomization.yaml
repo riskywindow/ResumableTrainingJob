@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# HA overlay: 2 replicas, PDB, anti-affinity, topology spread.
+# Usage: kustomize build deploy/prod/overlays/ha
+
+resources:
+  - ../../base
+  - pdb.yaml
+
+patches:
+  - path: patches/ha-deployment.yaml

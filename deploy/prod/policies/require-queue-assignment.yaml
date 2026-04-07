@@ -1,0 +1,41 @@
+# ValidatingAdmissionPolicy: RTJs in managed namespaces must have spec.queueName.
+#
+# Enforcement label: rtj.checkpoint.example.io/managed: "true"
+# Requires Kubernetes >= 1.30 (ValidatingAdmissionPolicy GA).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: rtj-require-queue-assignment
+  labels:
+    app.kubernetes.io/part-of: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: admission-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["training.checkpoint.example.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["resumabletrainingjobs"]
+  matchConditions:
+    - name: managed-namespace
+      expression: >-
+        has(namespaceObject.metadata.labels) &&
+        'rtj.checkpoint.example.io/managed' in namespaceObject.metadata.labels &&
+        namespaceObject.metadata.labels['rtj.checkpoint.example.io/managed'] == 'true'
+  validations:
+    - expression: "has(object.spec.queueName) && object.spec.queueName != ''"
+      message: "ResumableTrainingJobs in managed namespaces must specify spec.queueName"
+      reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: rtj-require-queue-assignment
+  labels:
+    app.kubernetes.io/part-of: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: admission-policy
+spec:
+  policyName: rtj-require-queue-assignment
+  validationActions:
+    - Deny

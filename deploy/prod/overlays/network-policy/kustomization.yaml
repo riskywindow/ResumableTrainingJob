@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Network policy overlay: restrict ingress/egress for the operator.
+# Usage: kustomize build deploy/prod/overlays/network-policy
+
+resources:
+  - ../../base
+  - networkpolicy.yaml

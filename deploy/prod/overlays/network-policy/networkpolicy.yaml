@@ -1,0 +1,45 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rtj-operator
+  namespace: rtj-system
+  labels:
+    app.kubernetes.io/name: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: checkpoint-native-preemption-controller
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Webhook traffic from the API server
+    - ports:
+        - port: 9443
+          protocol: TCP
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+    # Metrics scraping (from monitoring namespace)
+    - ports:
+        - port: 8080
+          protocol: TCP
+    # Health probes (from kubelet on any node)
+    - ports:
+        - port: 8081
+          protocol: TCP
+  egress:
+    # DNS resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Kubernetes API server
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP

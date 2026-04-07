@@ -1,0 +1,47 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rtj-operator.fullname" . }}
+  namespace: {{ include "rtj-operator.namespace" . }}
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rtj-operator.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow webhook traffic from the API server
+    - ports:
+        - port: {{ .Values.webhook.port }}
+          protocol: TCP
+      {{- with .Values.networkPolicy.webhookIngressNamespaceSelector }}
+      from:
+        - namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+      {{- end }}
+    # Allow metrics scraping
+    - ports:
+        - port: {{ .Values.metrics.port }}
+          protocol: TCP
+    # Allow health probes
+    - ports:
+        - port: {{ .Values.healthProbePort }}
+          protocol: TCP
+  egress:
+    # Allow DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Allow communication with the Kubernetes API server
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+{{- end }}

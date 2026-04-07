@@ -1,0 +1,60 @@
+# User-facing ClusterRoles for ResumableTrainingJob tenancy.
+#
+# Bind these to team ServiceAccounts or Groups via ClusterRoleBinding or
+# namespace-scoped RoleBinding depending on your tenancy model.
+#
+# rtj-editor  — full lifecycle management of RTJs (create, pause, resume, delete).
+# rtj-viewer  — read-only access to RTJs, CPPs, and RRPs.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rtj-editor
+  labels:
+    app.kubernetes.io/part-of: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: rbac
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules:
+  # RTJ lifecycle: create, update (pause/resume), delete.
+  - apiGroups: ["training.checkpoint.example.io"]
+    resources: ["resumabletrainingjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # RTJ status is read-only for users; the controller owns status.
+  - apiGroups: ["training.checkpoint.example.io"]
+    resources: ["resumabletrainingjobs/status"]
+    verbs: ["get"]
+  # Read cluster-scoped policies (not create/update).
+  - apiGroups: ["training.checkpoint.example.io"]
+    resources:
+      - checkpointprioritypolicies
+      - resumereadinesspolicies
+    verbs: ["get", "list", "watch"]
+  # Read Kueue queue state for observability.
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rtj-viewer
+  labels:
+    app.kubernetes.io/part-of: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: rbac
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: ["training.checkpoint.example.io"]
+    resources:
+      - resumabletrainingjobs
+      - resumabletrainingjobs/status
+      - checkpointprioritypolicies
+      - checkpointprioritypolicies/status
+      - resumereadinesspolicies
+      - resumereadinesspolicies/status
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads", "workloads/status"]
+    verbs: ["get", "list", "watch"]

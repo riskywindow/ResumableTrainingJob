@@ -1,0 +1,155 @@
+# -- Operator image configuration
+image:
+  repository: ghcr.io/example/checkpoint-native-preemption-controller
+  tag: ""  # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# -- Number of operator replicas. Use 2+ for HA.
+replicaCount: 2
+
+# -- Operator mode: "worker" (single-cluster / MultiKueue worker) or "manager" (MultiKueue manager).
+operatorMode: worker
+
+# -- Leader election for multi-replica deployments.
+leaderElection:
+  enabled: true
+
+# -- Enable experimental partial admission path for RTJ.
+experimentalPartialAdmission: false
+
+# -- Namespace to deploy into.
+namespace: rtj-system
+
+# -- ServiceAccount configuration.
+serviceAccount:
+  create: true
+  name: rtj-operator
+  annotations: {}
+
+# -- Resource requests and limits for the operator pod.
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# -- Pod security context.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# -- Pod topology spread constraints for HA.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: rtj-operator
+
+# -- Pod anti-affinity (set to "hard" or "soft").
+podAntiAffinity: hard
+
+# -- Node selector for operator pods.
+nodeSelector: {}
+
+# -- Tolerations for operator pods.
+tolerations: []
+
+# -- PodDisruptionBudget configuration.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# -- Readiness probe configuration.
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8081
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Liveness probe configuration.
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8081
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Metrics configuration.
+metrics:
+  # -- Port for the metrics endpoint.
+  port: 8080
+  service:
+    enabled: true
+    port: 8080
+
+# -- Health probe port.
+healthProbePort: 8081
+
+# -- Webhook configuration.
+webhook:
+  # -- Webhook server port.
+  port: 9443
+  service:
+    port: 443
+
+# -- cert-manager integration for webhook and metrics TLS.
+certManager:
+  # -- Enable cert-manager Certificate resources for webhook TLS.
+  enabled: true
+  # -- Issuer kind (Issuer or ClusterIssuer).
+  issuerKind: Issuer
+  # -- Issuer name. When empty, a self-signed Issuer is created.
+  issuerName: ""
+  # -- Certificate duration.
+  duration: 8760h  # 1 year
+  # -- Certificate renewal window.
+  renewBefore: 720h  # 30 days
+  # -- Enable TLS for the metrics endpoint via cert-manager.
+  metricsEnabled: false
+
+# -- NetworkPolicy configuration.
+networkPolicy:
+  # -- Enable NetworkPolicy resources.
+  enabled: false
+  # -- Allow ingress from these namespace selectors for webhook traffic.
+  webhookIngressNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: kube-system
+
+# -- Install CRDs with the chart.
+installCRDs: true
+
+# -- Priority class name for operator pods.
+priorityClassName: system-cluster-critical
+
+# -- Termination grace period.
+terminationGracePeriodSeconds: 10
+
+# -- Additional labels to apply to all resources.
+commonLabels: {}
+
+# -- Additional annotations to apply to all resources.
+commonAnnotations: {}

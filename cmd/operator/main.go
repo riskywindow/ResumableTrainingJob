@@ -57,12 +57,20 @@ func main() {
 			"'manager' suppresses local child JobSet creation for MultiKueue-managed RTJs "+
 			"and delegates runtime execution to remote worker clusters.")
 
+	var devMode bool
+	flag.BoolVar(&devMode, "dev-mode", false,
+		"Enable development mode (verbose logging, stack traces). "+
+			"Disable in production for structured JSON logging.")
+
 	opts := zap.Options{
-		Development: true,
+		Development: devMode,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
+	// Override Development based on the explicit flag so it takes effect
+	// after flag.Parse().
+	opts.Development = devMode
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	operatorMode, err := controller.ParseOperatorMode(modeFlag)

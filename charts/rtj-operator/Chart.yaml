@@ -1,0 +1,23 @@
+apiVersion: v2
+name: rtj-operator
+description: Checkpoint-native preemption controller for resumable training jobs on Kubernetes
+type: application
+version: 0.10.0
+appVersion: "0.10.0"
+kubeVersion: ">=1.30.0-0"
+keywords:
+  - kubernetes
+  - operator
+  - training
+  - checkpoint
+  - preemption
+  - kueue
+  - gpu
+home: https://github.com/example/checkpoint-native-preemption-controller
+sources:
+  - https://github.com/example/checkpoint-native-preemption-controller
+maintainers:
+  - name: checkpoint-native-preemption-controller maintainers
+annotations:
+  artifacthub.io/category: machine-learning
+  artifacthub.io/license: Apache-2.0

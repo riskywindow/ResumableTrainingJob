@@ -1,0 +1,18 @@
+# Example: production-managed namespace for training workloads.
+#
+# The label rtj.checkpoint.example.io/managed: "true" activates:
+#   1. Queue-assignment enforcement (RTJs must set spec.queueName).
+#   2. Direct JobSet creation is blocked for non-controller users.
+#   3. Direct Kueue Workload creation is blocked for non-controller users.
+#
+# Namespaces WITHOUT this label are unaffected (dev/test remain unrestricted).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: training-prod
+  labels:
+    rtj.checkpoint.example.io/managed: "true"
+    # Pod Security Standards: restricted profile.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

@@ -1,0 +1,76 @@
+{{- if .Values.certManager.enabled }}
+{{- if not .Values.certManager.issuerName }}
+# Self-signed CA Issuer for webhook TLS
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "rtj-operator.fullname" . }}-selfsigned
+  namespace: {{ include "rtj-operator.namespace" . }}
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "rtj-operator.webhookCertName" . }}
+  namespace: {{ include "rtj-operator.namespace" . }}
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "rtj-operator.webhookCertSecretName" . }}
+  duration: {{ .Values.certManager.duration }}
+  renewBefore: {{ .Values.certManager.renewBefore }}
+  issuerRef:
+    {{- if .Values.certManager.issuerName }}
+    name: {{ .Values.certManager.issuerName }}
+    kind: {{ .Values.certManager.issuerKind }}
+    {{- else }}
+    name: {{ include "rtj-operator.fullname" . }}-selfsigned
+    kind: Issuer
+    {{- end }}
+  dnsNames:
+    - {{ include "rtj-operator.webhookServiceName" . }}
+    - {{ include "rtj-operator.webhookServiceName" . }}.{{ include "rtj-operator.namespace" . }}
+    - {{ include "rtj-operator.webhookServiceName" . }}.{{ include "rtj-operator.namespace" . }}.svc
+    - {{ include "rtj-operator.webhookServiceName" . }}.{{ include "rtj-operator.namespace" . }}.svc.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - server auth
+{{- if .Values.certManager.metricsEnabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "rtj-operator.fullname" . }}-metrics-cert
+  namespace: {{ include "rtj-operator.namespace" . }}
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "rtj-operator.fullname" . }}-metrics-tls
+  duration: {{ .Values.certManager.duration }}
+  renewBefore: {{ .Values.certManager.renewBefore }}
+  issuerRef:
+    {{- if .Values.certManager.issuerName }}
+    name: {{ .Values.certManager.issuerName }}
+    kind: {{ .Values.certManager.issuerKind }}
+    {{- else }}
+    name: {{ include "rtj-operator.fullname" . }}-selfsigned
+    kind: Issuer
+    {{- end }}
+  dnsNames:
+    - {{ include "rtj-operator.metricsServiceName" . }}
+    - {{ include "rtj-operator.metricsServiceName" . }}.{{ include "rtj-operator.namespace" . }}
+    - {{ include "rtj-operator.metricsServiceName" . }}.{{ include "rtj-operator.namespace" . }}.svc
+    - {{ include "rtj-operator.metricsServiceName" . }}.{{ include "rtj-operator.namespace" . }}.svc.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - server auth
+{{- end }}
+{{- end }}
