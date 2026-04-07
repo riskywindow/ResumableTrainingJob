@@ -1,0 +1,25 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: rtj-operator-webhook-cert
+  namespace: rtj-system
+  labels:
+    app.kubernetes.io/name: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: cert-manager
+spec:
+  secretName: rtj-operator-webhook-tls
+  duration: 8760h   # 1 year
+  renewBefore: 720h  # 30 days
+  issuerRef:
+    name: rtj-operator-selfsigned
+    kind: Issuer
+  dnsNames:
+    - webhook-service
+    - webhook-service.rtj-system
+    - webhook-service.rtj-system.svc
+    - webhook-service.rtj-system.svc.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - server auth

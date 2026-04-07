@@ -1,0 +1,50 @@
+# ValidatingAdmissionPolicy: Block non-controller JobSet writes in managed namespaces.
+#
+# In managed namespaces, JobSets are runtime-only children of RTJs.  Direct creation
+# or mutation by end users would bypass Kueue quota enforcement and the RTJ lifecycle.
+# Only the operator service-account (in rtj-system) is exempted.
+#
+# Enforcement label: rtj.checkpoint.example.io/managed: "true"
+# Requires Kubernetes >= 1.30 (ValidatingAdmissionPolicy GA).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: rtj-deny-direct-jobset
+  labels:
+    app.kubernetes.io/part-of: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: admission-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["jobset.x-k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobsets"]
+  matchConditions:
+    # Only activate in namespaces that opted in to guardrails.
+    - name: managed-namespace
+      expression: >-
+        has(namespaceObject.metadata.labels) &&
+        'rtj.checkpoint.example.io/managed' in namespaceObject.metadata.labels &&
+        namespaceObject.metadata.labels['rtj.checkpoint.example.io/managed'] == 'true'
+    # Skip the policy for the RTJ controller service-account.
+    - name: not-controller
+      expression: >-
+        !request.userInfo.username.startsWith('system:serviceaccount:rtj-system:')
+  validations:
+    - expression: "false"
+      messageExpression: "'Direct JobSet writes in managed namespace ' + namespaceObject.metadata.name + ' are denied; use ResumableTrainingJob instead'"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: rtj-deny-direct-jobset
+  labels:
+    app.kubernetes.io/part-of: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: admission-policy
+spec:
+  policyName: rtj-deny-direct-jobset
+  validationActions:
+    - Deny

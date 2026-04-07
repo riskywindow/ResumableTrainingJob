@@ -1,0 +1,13 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: checkpoint-native-preemption-controller-mutating-webhook-configuration
+  annotations:
+    cert-manager.io/inject-ca-from: rtj-system/rtj-operator-webhook-cert
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: checkpoint-native-preemption-controller-validating-webhook-configuration
+  annotations:
+    cert-manager.io/inject-ca-from: rtj-system/rtj-operator-webhook-cert

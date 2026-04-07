@@ -1,0 +1,55 @@
+# ValidatingAdmissionPolicy: Block non-controller Workload writes in managed namespaces.
+#
+# In managed namespaces, Kueue Workloads are created exclusively by the RTJ controller.
+# Direct creation or mutation by end users would circumvent the RTJ admission model,
+# allowing quota consumption without lifecycle management.  Only the operator
+# service-account (in rtj-system) and Kueue's own controllers are exempted.
+#
+# Enforcement label: rtj.checkpoint.example.io/managed: "true"
+# Requires Kubernetes >= 1.30 (ValidatingAdmissionPolicy GA).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: rtj-deny-direct-workload
+  labels:
+    app.kubernetes.io/part-of: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: admission-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kueue.x-k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE"]
+        resources: ["workloads"]
+  matchConditions:
+    # Only activate in namespaces that opted in to guardrails.
+    - name: managed-namespace
+      expression: >-
+        has(namespaceObject.metadata.labels) &&
+        'rtj.checkpoint.example.io/managed' in namespaceObject.metadata.labels &&
+        namespaceObject.metadata.labels['rtj.checkpoint.example.io/managed'] == 'true'
+    # Skip for the RTJ controller service-account.
+    - name: not-rtj-controller
+      expression: >-
+        !request.userInfo.username.startsWith('system:serviceaccount:rtj-system:')
+    # Skip for Kueue's own controllers (kueue-system namespace).
+    - name: not-kueue-controller
+      expression: >-
+        !request.userInfo.username.startsWith('system:serviceaccount:kueue-system:')
+  validations:
+    - expression: "false"
+      messageExpression: "'Direct Workload creation in managed namespace ' + namespaceObject.metadata.name + ' is denied; use ResumableTrainingJob instead'"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: rtj-deny-direct-workload
+  labels:
+    app.kubernetes.io/part-of: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: admission-policy
+spec:
+  policyName: rtj-deny-direct-workload
+  validationActions:
+    - Deny

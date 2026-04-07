@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: rtj-system
+
+resources:
+  - ../../../config/crd/bases/training.checkpoint.example.io_resumabletrainingjobs.yaml
+  - ../../../config/crd/bases/training.checkpoint.example.io_checkpointprioritypolicies.yaml
+  - ../../../config/crd/bases/training.checkpoint.example.io_resumereadinesspolicies.yaml
+  - ../../../config/manager/manager.yaml
+  - ../../../config/rbac/service_account.yaml
+  - ../../../config/rbac/role.yaml
+  - ../../../config/rbac/role_binding.yaml
+  - ../../../config/rbac/leader_election_role.yaml
+  - ../../../config/rbac/leader_election_role_binding.yaml
+  - ../../../config/webhook/service.yaml
+  - ../../../config/webhook/manifests.yaml
+  - namespace.yaml
+
+patches:
+  - path: patches/manager-prod.yaml
+  - path: patches/webhook-service-prod.yaml
+
+images:
+  - name: controller
+    newName: ghcr.io/example/checkpoint-native-preemption-controller
+    newTag: "0.10.0"
+
+commonLabels:
+  app.kubernetes.io/part-of: checkpoint-native-preemption-controller
+  app.kubernetes.io/managed-by: kustomize

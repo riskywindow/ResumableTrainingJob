@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# cert-manager overlay: webhook TLS via cert-manager Certificate resources.
+# Usage: kustomize build deploy/prod/overlays/cert-manager
+#
+# Requires cert-manager >= 1.14 installed in the cluster.
+# The overlay creates a self-signed Issuer and Certificate that injects
+# CA bundles into webhook configurations via cert-manager annotations.
+
+resources:
+  - ../../base
+  - issuer.yaml
+  - certificate.yaml
+
+patches:
+  - path: patches/webhook-cainjection.yaml

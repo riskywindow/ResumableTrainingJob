@@ -1,0 +1,10 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: rtj-operator-selfsigned
+  namespace: rtj-system
+  labels:
+    app.kubernetes.io/name: checkpoint-native-preemption-controller
+    app.kubernetes.io/component: cert-manager
+spec:
+  selfSigned: {}

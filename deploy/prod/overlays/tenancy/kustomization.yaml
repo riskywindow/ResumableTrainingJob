@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Tenancy overlay: composes the production base with admission guardrails.
+#
+# Applies:
+#   - All base resources (CRDs, operator, RBAC, webhooks)
+#   - ValidatingAdmissionPolicy + Binding for queue enforcement
+#   - ValidatingAdmissionPolicy + Binding for direct JobSet denial
+#   - ValidatingAdmissionPolicy + Binding for direct Workload denial
+#   - User-facing RBAC roles (rtj-editor, rtj-viewer)
+#   - Example managed namespace and ClusterQueue
+
+resources:
+  - ../../base
+  - ../../policies/require-queue-assignment.yaml
+  - ../../policies/deny-direct-jobset.yaml
+  - ../../policies/deny-direct-workload.yaml
+  - ../../../../config/rbac/rtj_user_roles.yaml
+  - ../../namespaces/managed-namespace.yaml

@@ -1,0 +1,17 @@
+{{- if .Values.metrics.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rtj-operator.metricsServiceName" . }}
+  namespace: {{ include "rtj-operator.namespace" . }}
+  labels:
+    {{- include "rtj-operator.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "rtj-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: {{ .Values.metrics.service.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+{{- end }}

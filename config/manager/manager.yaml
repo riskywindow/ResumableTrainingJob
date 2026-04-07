@@ -14,9 +14,18 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: checkpoint-native-preemption-controller
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
     spec:
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: manager
           image: controller:latest
@@ -28,18 +37,35 @@ spec:
           ports:
             - containerPort: 8080
               name: metrics
+              protocol: TCP
             - containerPort: 8081
               name: healthz
+              protocol: TCP
             - containerPort: 9443
               name: webhook-server
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           readinessProbe:
             httpGet:
               path: /readyz
               port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
               cpu: 100m
@@ -47,3 +73,12 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: webhook-server-cert
+            optional: true
