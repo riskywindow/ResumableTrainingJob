@@ -10,369 +10,807 @@ spec:
     plural: resumabletrainingjobs
     singular: resumabletrainingjob
     shortNames:
-      - rtj
+    - rtj
   scope: Namespaced
+  conversion:
+    strategy: Webhook
+    webhook:
+      conversionReviewVersions:
+      - v1
+      clientConfig:
+        service:
+          name: webhook-service
+          namespace: system
+          path: /convert
   versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      additionalPrinterColumns:
-        - name: Phase
-          type: string
-          jsonPath: .status.phase
-        - name: Desired
-          type: string
-          jsonPath: .spec.control.desiredState
-        - name: Suspended
-          type: boolean
-          jsonPath: .spec.suspend
-        - name: Queue
-          type: string
-          jsonPath: .spec.queueName
-        - name: Attempt
-          type: integer
-          jsonPath: .status.currentRunAttempt
-        - name: Age
-          type: date
-          jsonPath: .metadata.creationTimestamp
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            apiVersion:
-              type: string
-            kind:
-              type: string
-            metadata:
-              type: object
-            spec:
-              type: object
-              required:
-                - queueName
-                - workloadPriorityClassName
-                - identity
-                - runtime
-                - checkpoint
-                - resume
-              properties:
-                suspend:
-                  type: boolean
-                queueName:
-                  type: string
-                  minLength: 1
-                workloadPriorityClassName:
-                  type: string
-                  minLength: 1
-                identity:
-                  type: object
-                  required:
-                    - image
-                    - codeVersion
-                    - worldSize
-                    - gpuShape
-                  properties:
-                    image:
-                      type: string
-                      minLength: 1
-                    codeVersion:
-                      type: string
-                      minLength: 1
-                    worldSize:
-                      type: integer
-                      format: int32
-                      minimum: 1
-                    gpuShape:
-                      type: string
-                      minLength: 1
-                runtime:
-                  type: object
-                  required:
-                    - mode
-                    - optimizerMode
-                    - shardingMode
-                    - template
-                  properties:
-                    mode:
-                      type: string
-                      enum:
-                        - DDP
-                        - FSDP
-                    optimizerMode:
-                      type: string
-                      minLength: 1
-                    shardingMode:
-                      type: string
-                      minLength: 1
-                    template:
+  - name: v1alpha1
+    served: true
+    storage: false
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: Phase
+      type: string
+      jsonPath: .status.phase
+    - name: Desired
+      type: string
+      jsonPath: .spec.control.desiredState
+    - name: Suspended
+      type: boolean
+      jsonPath: .spec.suspend
+    - name: Queue
+      type: string
+      jsonPath: .spec.queueName
+    - name: Attempt
+      type: integer
+      jsonPath: .status.currentRunAttempt
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            required:
+            - queueName
+            - workloadPriorityClassName
+            - identity
+            - runtime
+            - checkpoint
+            - resume
+            properties:
+              suspend:
+                type: boolean
+              queueName:
+                type: string
+                minLength: 1
+              workloadPriorityClassName:
+                type: string
+                minLength: 1
+              identity:
+                type: object
+                required:
+                - image
+                - codeVersion
+                - worldSize
+                - gpuShape
+                properties:
+                  image:
+                    type: string
+                    minLength: 1
+                  codeVersion:
+                    type: string
+                    minLength: 1
+                  worldSize:
+                    type: integer
+                    format: int32
+                    minimum: 1
+                  gpuShape:
+                    type: string
+                    minLength: 1
+              runtime:
+                type: object
+                required:
+                - mode
+                - optimizerMode
+                - shardingMode
+                - template
+                properties:
+                  mode:
+                    type: string
+                    enum:
+                    - DDP
+                    - FSDP
+                  optimizerMode:
+                    type: string
+                    minLength: 1
+                  shardingMode:
+                    type: string
+                    minLength: 1
+                  template:
+                    type: object
+                    required:
+                    - spec
+                    properties:
+                      apiVersion:
+                        type: string
+                      kind:
+                        type: string
+                        enum:
+                        - JobSet
+                      metadata:
+                        type: object
+                        properties:
+                          labels:
+                            type: object
+                            additionalProperties:
+                              type: string
+                          annotations:
+                            type: object
+                            additionalProperties:
+                              type: string
+                      spec:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+              checkpoint:
+                type: object
+                required:
+                - storageURI
+                - interval
+                - freshnessBudget
+                - maxDrainTime
+                properties:
+                  storageURI:
+                    type: string
+                    minLength: 1
+                  interval:
+                    type: string
+                  freshnessBudget:
+                    type: string
+                  maxDrainTime:
+                    type: string
+                  safePointMode:
+                    type: string
+                    enum:
+                    - StepBoundary
+              resume:
+                type: object
+                required:
+                - maxResumeRetries
+                properties:
+                  sourcePolicy:
+                    type: string
+                    enum:
+                    - LatestCompatibleComplete
+                  maxResumeRetries:
+                    type: integer
+                    format: int32
+                    minimum: 1
+                  allowWorldSizeChange:
+                    description: Permits resuming from a checkpoint saved at a different world size. Requires PyTorch DCP resharding.
+                    type: boolean
+              parallelism:
+                description: Configures scalable worker group and partial admission. When absent, worker count derives from identity.worldSize.
+                type: object
+                properties:
+                  preferredCount:
+                    type: integer
+                    format: int32
+                    minimum: 1
+                  minCount:
+                    type: integer
+                    format: int32
+                    minimum: 1
+                  podSetName:
+                    type: string
+                  enablePartialAdmission:
+                    type: boolean
+              topology:
+                description: Declares topology placement requirements. When absent or mode is Disabled, topology-aware scheduling is off (Phase 3 behavior preserved).
+                type: object
+                required:
+                - mode
+                properties:
+                  mode:
+                    description: Topology placement mode for the worker pod set.
+                    type: string
+                    enum:
+                    - Disabled
+                    - Required
+                    - Preferred
+                    - Unconstrained
+                  topologyLevel:
+                    description: Node label key used as the topology domain. Required when mode is Required or Preferred.
+                    type: string
+                  leaderWorkerColocation:
+                    description: Requests leader pod co-location in the same topology domain as workers. Only meaningful when mode is Required, Preferred, or Unconstrained.
+                    type: boolean
+              managedBy:
+                description: Identifies the external controller responsible for this RTJ's Workload lifecycle. When set to "kueue.x-k8s.io/multikueue", the RTJ is eligible for MultiKueue dispatch. When
+                  empty or absent, single-cluster Phase 5 behavior is preserved. Immutable once set.
+                type: string
+                maxLength: 256
+              priorityPolicyRef:
+                description: Optional reference to a cluster-scoped CheckpointPriorityPolicy that configures checkpoint-aware priority shaping. When absent, no priority shaping is applied (Phase 4 behavior
+                  preserved).
+                type: object
+                required:
+                - name
+                properties:
+                  name:
+                    type: string
+                    minLength: 1
+              devices:
+                description: Declares DRA device requirements for worker pods. When present with mode=DRA, the operator creates companion ResourceClaimTemplate objects. When absent or mode=Disabled, Phase
+                  7 behavior is preserved unchanged.
+                type: object
+                required:
+                - mode
+                properties:
+                  mode:
+                    description: 'Device allocation mode. Disabled: no DRA claims. DRA: native DRA ResourceClaimTemplate generation.'
+                    type: string
+                    enum:
+                    - Disabled
+                    - DRA
+                  claims:
+                    description: Per-worker ResourceClaimTemplate specs. Each entry produces a companion ResourceClaimTemplate owned by the RTJ. Required when mode is DRA.
+                    type: array
+                    items:
                       type: object
                       required:
-                        - spec
+                      - name
+                      - containers
+                      - request
                       properties:
-                        apiVersion:
+                        name:
+                          description: Unique identifier for this claim within the RTJ. Used as suffix for the generated ResourceClaimTemplate name.
                           type: string
-                        kind:
-                          type: string
-                          enum:
-                            - JobSet
-                        metadata:
-                          type: object
-                          properties:
-                            labels:
-                              type: object
-                              additionalProperties:
-                                type: string
-                            annotations:
-                              type: object
-                              additionalProperties:
-                                type: string
-                        spec:
-                          type: object
-                          x-kubernetes-preserve-unknown-fields: true
-                checkpoint:
-                  type: object
-                  required:
-                    - storageURI
-                    - interval
-                    - freshnessBudget
-                    - maxDrainTime
-                  properties:
-                    storageURI:
-                      type: string
-                      minLength: 1
-                    interval:
-                      type: string
-                    freshnessBudget:
-                      type: string
-                    maxDrainTime:
-                      type: string
-                    safePointMode:
-                      type: string
-                      enum:
-                        - StepBoundary
-                resume:
-                  type: object
-                  required:
-                    - maxResumeRetries
-                  properties:
-                    sourcePolicy:
-                      type: string
-                      enum:
-                        - LatestCompatibleComplete
-                    maxResumeRetries:
-                      type: integer
-                      format: int32
-                      minimum: 1
-                    allowWorldSizeChange:
-                      description: >-
-                        Permits resuming from a checkpoint saved at a different
-                        world size. Requires PyTorch DCP resharding.
-                      type: boolean
-                # Phase 3: parallelism
-                parallelism:
-                  description: >-
-                    Configures scalable worker group and partial admission.
-                    When absent, worker count derives from identity.worldSize.
-                  type: object
-                  properties:
-                    preferredCount:
-                      type: integer
-                      format: int32
-                      minimum: 1
-                    minCount:
-                      type: integer
-                      format: int32
-                      minimum: 1
-                    podSetName:
-                      type: string
-                    enablePartialAdmission:
-                      type: boolean
-                # Phase 4: topology
-                topology:
-                  description: >-
-                    Declares topology placement requirements. When absent or
-                    mode is Disabled, topology-aware scheduling is off
-                    (Phase 3 behavior preserved).
-                  type: object
-                  required:
-                    - mode
-                  properties:
-                    mode:
-                      description: >-
-                        Topology placement mode for the worker pod set.
-                      type: string
-                      enum:
-                        - Disabled
-                        - Required
-                        - Preferred
-                        - Unconstrained
-                    topologyLevel:
-                      description: >-
-                        Node label key used as the topology domain.
-                        Required when mode is Required or Preferred.
-                      type: string
-                    leaderWorkerColocation:
-                      description: >-
-                        Requests leader pod co-location in the same topology
-                        domain as workers. Only meaningful when mode is
-                        Required, Preferred, or Unconstrained.
-                      type: boolean
-                # Phase 6: managedBy
-                managedBy:
-                  description: >-
-                    Identifies the external controller responsible for this RTJ's
-                    Workload lifecycle. When set to "kueue.x-k8s.io/multikueue",
-                    the RTJ is eligible for MultiKueue dispatch. When empty or
-                    absent, single-cluster Phase 5 behavior is preserved.
-                    Immutable once set.
-                  type: string
-                  maxLength: 256
-                # Phase 5: priority policy ref
-                priorityPolicyRef:
-                  description: >-
-                    Optional reference to a cluster-scoped CheckpointPriorityPolicy
-                    that configures checkpoint-aware priority shaping. When absent,
-                    no priority shaping is applied (Phase 4 behavior preserved).
-                  type: object
-                  required:
-                    - name
-                  properties:
-                    name:
-                      type: string
-                      minLength: 1
-                # Phase 8: devices
-                devices:
-                  description: >-
-                    Declares DRA device requirements for worker pods.
-                    When present with mode=DRA, the operator creates companion
-                    ResourceClaimTemplate objects. When absent or mode=Disabled,
-                    Phase 7 behavior is preserved unchanged.
-                  type: object
-                  required:
-                    - mode
-                  properties:
-                    mode:
-                      description: >-
-                        Device allocation mode. Disabled: no DRA claims.
-                        DRA: native DRA ResourceClaimTemplate generation.
-                      type: string
-                      enum:
-                        - Disabled
-                        - DRA
-                    claims:
-                      description: >-
-                        Per-worker ResourceClaimTemplate specs. Each entry
-                        produces a companion ResourceClaimTemplate owned by
-                        the RTJ. Required when mode is DRA.
-                      type: array
-                      items:
-                        type: object
-                        required:
-                          - name
-                          - containers
-                          - request
-                        properties:
-                          name:
-                            description: >-
-                              Unique identifier for this claim within the RTJ.
-                              Used as suffix for the generated
-                              ResourceClaimTemplate name.
+                          minLength: 1
+                          maxLength: 63
+                          pattern: ^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$
+                        containers:
+                          description: Container names within the worker pod template that should receive this claim.
+                          type: array
+                          minItems: 1
+                          items:
                             type: string
-                            minLength: 1
-                            maxLength: 63
-                            pattern: '^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$'
-                          containers:
-                            description: >-
-                              Container names within the worker pod template
-                              that should receive this claim.
-                            type: array
-                            minItems: 1
-                            items:
+                        request:
+                          description: Constrained DRA device request fragment copied into the generated ResourceClaimTemplate.
+                          type: object
+                          required:
+                          - deviceClassName
+                          properties:
+                            deviceClassName:
+                              description: DRA DeviceClass name. Must match a DeviceClass installed in the cluster.
                               type: string
-                          request:
-                            description: >-
-                              Constrained DRA device request fragment copied
-                              into the generated ResourceClaimTemplate.
-                            type: object
-                            required:
-                              - deviceClassName
-                            properties:
-                              deviceClassName:
-                                description: >-
-                                  DRA DeviceClass name. Must match a
-                                  DeviceClass installed in the cluster.
+                              minLength: 1
+                            count:
+                              description: 'Number of devices requested per worker pod. Default: 1.'
+                              type: integer
+                              format: int32
+                              minimum: 1
+                              default: 1
+                            selectors:
+                              description: CEL-expression selectors for device attributes. All selectors must match.
+                              type: array
+                              items:
                                 type: string
-                                minLength: 1
-                              count:
-                                description: >-
-                                  Number of devices requested per worker pod.
-                                  Default: 1.
-                                type: integer
-                                format: int32
-                                minimum: 1
-                                default: 1
-                              selectors:
-                                description: >-
-                                  CEL-expression selectors for device
-                                  attributes. All selectors must match.
-                                type: array
-                                items:
-                                  type: string
-                # Phase 9: elasticity
-                elasticity:
-                  description: >-
-                    Configures manual target-based worker-count resize.
-                    When nil or mode is Disabled, Phase 8 behavior is
-                    preserved (fixed worker count at admission time).
+              elasticity:
+                description: Configures manual target-based worker-count resize. When nil or mode is Disabled, Phase 8 behavior is preserved (fixed worker count at admission time).
+                type: object
+                required:
+                - mode
+                properties:
+                  mode:
+                    description: 'Elasticity mode. Disabled: no elasticity (Phase 8). Manual: operator-initiated target-based resize.'
+                    type: string
+                    enum:
+                    - Disabled
+                    - Manual
+                  targetWorkerCount:
+                    description: Desired worker count. Must be >= minCount and <= preferredCount. Only meaningful when mode is Manual.
+                    type: integer
+                    format: int32
+                    minimum: 1
+                  inPlaceShrinkPolicy:
+                    description: 'Controls in-place shrink behavior. IfSupported: try in-place first, fall back to C&R. Never: always C&R.'
+                    type: string
+                    enum:
+                    - IfSupported
+                    - Never
+                  reclaimMode:
+                    description: Controls quota release mechanism for in-place shrink. Only ReclaimablePods is supported.
+                    type: string
+                    enum:
+                    - ReclaimablePods
+              control:
+                type: object
+                properties:
+                  desiredState:
+                    type: string
+                    enum:
+                    - Running
+                    - Paused
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+                enum:
+                - Pending
+                - Queued
+                - Admitted
+                - Starting
+                - Running
+                - YieldRequested
+                - Draining
+                - Paused
+                - Restoring
+                - Succeeded
+                - Failed
+              conditions:
+                type: array
+                items:
                   type: object
                   required:
-                    - mode
+                  - type
+                  - status
+                  - reason
+                  - message
+                  - lastTransitionTime
                   properties:
-                    mode:
-                      description: >-
-                        Elasticity mode. Disabled: no elasticity (Phase 8).
-                        Manual: operator-initiated target-based resize.
+                    type:
                       type: string
-                      enum:
-                        - Disabled
-                        - Manual
-                    targetWorkerCount:
-                      description: >-
-                        Desired worker count. Must be >= minCount and
-                        <= preferredCount. Only meaningful when mode is Manual.
+                    status:
+                      type: string
+                    observedGeneration:
                       type: integer
-                      format: int32
-                      minimum: 1
-                    inPlaceShrinkPolicy:
-                      description: >-
-                        Controls in-place shrink behavior. IfSupported: try
-                        in-place first, fall back to C&R. Never: always C&R.
+                      format: int64
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                    reason:
+                      type: string
+                    message:
+                      type: string
+              workloadReference:
+                type: object
+                required:
+                - name
+                properties:
+                  apiVersion:
+                    type: string
+                  kind:
+                    type: string
+                  name:
+                    type: string
+                    minLength: 1
+                  namespace:
+                    type: string
+              admittedClusterQueue:
+                type: string
+              currentSuspension:
+                type: object
+                required:
+                - suspended
+                properties:
+                  suspended:
+                    type: boolean
+                  source:
+                    type: string
+                    enum:
+                    - Kueue
+                    - Manual
+                    - Unknown
+                  reason:
+                    type: string
+                  message:
+                    type: string
+                  observedAt:
+                    type: string
+                    format: date-time
+              currentRunAttempt:
+                type: integer
+                format: int32
+              pauseRequestID:
+                type: string
+              activeJobSetName:
+                type: string
+              activeControlConfigMapName:
+                type: string
+              selectedCheckpoint:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  storageURI:
+                    type: string
+                  manifestURI:
+                    type: string
+                  completionTime:
+                    type: string
+                    format: date-time
+                  sourceRunAttempt:
+                    type: integer
+                    format: int32
+                  compatibilityState:
+                    type: string
+                    enum:
+                    - Compatible
+                    - Incompatible
+                    - Unknown
+                  compatibilityReason:
+                    type: string
+                  worldSize:
+                    description: World size recorded in the checkpoint manifest.
+                    type: integer
+                    format: int32
+              lastCompletedCheckpoint:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  storageURI:
+                    type: string
+                  manifestURI:
+                    type: string
+                  completionTime:
+                    type: string
+                    format: date-time
+                  sourceRunAttempt:
+                    type: integer
+                    format: int32
+                  compatibilityState:
+                    type: string
+                    enum:
+                    - Compatible
+                    - Incompatible
+                    - Unknown
+                  compatibilityReason:
+                    type: string
+                  worldSize:
+                    description: World size recorded in the checkpoint manifest.
+                    type: integer
+                    format: int32
+              transitionTimestamps:
+                type: object
+                properties:
+                  lastTransitionTime:
+                    type: string
+                    format: date-time
+                  queuedAt:
+                    type: string
+                    format: date-time
+                  admittedAt:
+                    type: string
+                    format: date-time
+                  startingAt:
+                    type: string
+                    format: date-time
+                  runningAt:
+                    type: string
+                    format: date-time
+                  yieldRequestedAt:
+                    type: string
+                    format: date-time
+                  drainingAt:
+                    type: string
+                    format: date-time
+                  lastCheckpointCompletedAt:
+                    type: string
+                    format: date-time
+                  pausedAt:
+                    type: string
+                    format: date-time
+                  restoringAt:
+                    type: string
+                    format: date-time
+                  restoreCompletedAt:
+                    type: string
+                    format: date-time
+                  succeededAt:
+                    type: string
+                    format: date-time
+                  failedAt:
+                    type: string
+                    format: date-time
+              reason:
+                type: string
+              message:
+                type: string
+              observedGeneration:
+                type: integer
+                format: int64
+              admission:
+                description: Admitted shape from Kueue.
+                type: object
+                properties:
+                  admittedWorkerCount:
+                    type: integer
+                    format: int32
+                  preferredWorkerCount:
+                    type: integer
+                    format: int32
+                  activeWorkerCount:
+                    type: integer
+                    format: int32
+                  admittedFlavors:
+                    type: object
+                    additionalProperties:
+                      type: string
+              restore:
+                description: Details of the most recent checkpoint restore.
+                type: object
+                properties:
+                  lastCheckpointWorldSize:
+                    type: integer
+                    format: int32
+                  lastRestoreWorldSize:
+                    type: integer
+                    format: int32
+                  restoreMode:
+                    type: string
+                    enum:
+                    - SameSize
+                    - Reshard
+              launchReadiness:
+                description: Pre-launch readiness state set by the ResumeReadiness AdmissionCheck controller. Nil when readiness gate is not active.
+                type: object
+                required:
+                - ready
+                properties:
+                  ready:
+                    type: boolean
+                  gateState:
+                    type: string
+                    enum:
+                    - Pending
+                    - Ready
+                    - Rejected
+                  reason:
+                    type: string
+                  message:
+                    type: string
+                  lastTransitionTime:
+                    type: string
+                    format: date-time
+              topology:
+                description: Admitted topology assignment from Kueue TAS. Nil when topology is not enabled or not yet admitted.
+                type: object
+                properties:
+                  levels:
+                    type: array
+                    items:
+                      type: string
+                  domains:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        values:
+                          type: array
+                          items:
+                            type: string
+                        count:
+                          type: integer
+                          format: int32
+              effectiveLaunchShape:
+                description: Computed launch shape derived from admission decisions. Nil before first admission.
+                type: object
+                properties:
+                  workerCount:
+                    type: integer
+                    format: int32
+                  worldSize:
+                    type: integer
+                    format: int32
+                  resumeMode:
+                    type: string
+                    enum:
+                    - SameSize
+                    - Reshard
+                  selectedCheckpointID:
+                    type: string
+              priorityShaping:
+                description: Checkpoint-aware priority shaping state. Nil when no CheckpointPriorityPolicy is referenced.
+                type: object
+                properties:
+                  basePriority:
+                    description: Static priority from the WorkloadPriorityClass.
+                    type: integer
+                    format: int32
+                  effectivePriority:
+                    description: Dynamically computed priority written to Workload.Spec.Priority.
+                    type: integer
+                    format: int32
+                  preemptionState:
+                    description: Current preemption lifecycle state.
+                    type: string
+                    enum:
+                    - Protected
+                    - Active
+                    - Cooldown
+                    - Preemptible
+                  preemptionStateReason:
+                    description: Machine-readable reason for the current preemption state.
+                    type: string
+                  protectedUntil:
+                    description: Timestamp until which the startup protection window is active.
+                    type: string
+                    format: date-time
+                  lastCompletedCheckpointTime:
+                    description: Completion timestamp of the most recent checkpoint.
+                    type: string
+                    format: date-time
+                  checkpointAge:
+                    description: Age of the most recent checkpoint as a duration string.
+                    type: string
+                  lastYieldTime:
+                    description: Timestamp of the most recent yield (preemption).
+                    type: string
+                    format: date-time
+                  lastResumeTime:
+                    description: Timestamp of the most recent resume.
+                    type: string
+                    format: date-time
+                  recentYieldCount:
+                    description: Number of yields within the policy's yieldWindow.
+                    type: integer
+                    format: int32
+                  appliedPolicyRef:
+                    description: Name of the CheckpointPriorityPolicy last used to compute effective priority.
+                    type: string
+              launchGate:
+                description: Aggregate launch gate evaluation state. Determines when the controller may render the child JobSet. All fields are controller-owned. Nil before the first admission attempt.
+                type: object
+                properties:
+                  launchGateState:
+                    description: 'Aggregate launch gate state: Open, Blocked, or Unknown.'
+                    type: string
+                    enum:
+                    - Open
+                    - Blocked
+                    - Unknown
+                  launchGateReason:
+                    description: Machine-readable reason for the current gate state.
+                    type: string
+                  message:
+                    description: Human-readable explanation of the current gate state.
+                    type: string
+                  admissionCheckSummary:
+                    description: Maps admission check name to its state. Empty when no AdmissionChecks are configured (Phase 6 fail-open).
+                    type: object
+                    additionalProperties:
                       type: string
                       enum:
-                        - IfSupported
-                        - Never
-                    reclaimMode:
-                      description: >-
-                        Controls quota release mechanism for in-place shrink.
-                        Only ReclaimablePods is supported.
+                      - Pending
+                      - Ready
+                      - Retry
+                      - Rejected
+                  topologyGateState:
+                    description: Whether the topology assignment prerequisite is satisfied.
+                    type: string
+                    enum:
+                    - NotConfigured
+                    - Pending
+                    - Assigned
+                  lastTransitionTime:
+                    description: When the launch gate state last changed.
+                    type: string
+                    format: date-time
+              provisioning:
+                description: State of the ProvisioningRequest AdmissionCheck gate. Derived from Workload AdmissionCheck state. All fields are controller-owned. Nil when not configured or not yet evaluated.
+                type: object
+                properties:
+                  provisioningState:
+                    description: Current provisioning gate state.
+                    type: string
+                    enum:
+                    - NotConfigured
+                    - Pending
+                    - Provisioned
+                    - Failed
+                  provisioningRequestRef:
+                    description: Reference to the ProvisioningRequest resource created by Kueue for this workload.
+                    type: object
+                    required:
+                    - name
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                  provisioningAttempt:
+                    description: Number of provisioning attempts observed.
+                    type: integer
+                    format: int32
+                  reason:
+                    description: Machine-readable reason for the current state.
+                    type: string
+                  message:
+                    description: Human-readable explanation of the current state.
+                    type: string
+                  provisioningLastTransitionTime:
+                    description: When the provisioning state last changed.
+                    type: string
+                    format: date-time
+              startupRecovery:
+                description: Startup and recovery lifecycle state of the child runtime. Integrates with Kueue waitForPodsReady eviction signals. All fields are controller-owned. Nil before the first launch.
+                type: object
+                properties:
+                  startupState:
+                    description: Current startup/recovery state.
+                    type: string
+                    enum:
+                    - NotStarted
+                    - Starting
+                    - Running
+                    - StartupTimedOut
+                    - RecoveryTimedOut
+                    - Evicted
+                  podsReadyState:
+                    description: Derived pod readiness indicator.
+                    type: string
+                    enum:
+                    - Unknown
+                    - PodsReady
+                    - PodsNotReady
+                    - NoRuntime
+                  lastLaunchFailureReason:
+                    description: Machine-readable reason for the most recent launch failure.
+                    type: string
+                  lastEvictionReason:
+                    description: Machine-readable reason for the most recent Kueue eviction.
+                    type: string
+                  lastRequeueReason:
+                    description: Machine-readable reason for the most recent requeue.
+                    type: string
+                  lastTransitionTime:
+                    description: When the startup state last changed.
+                    type: string
+                    format: date-time
+              capacity:
+                description: Derived indicator of whether a physical capacity guarantee is active. Computed from admission and provisioning state. All fields are controller-owned. Nil before first evaluation.
+                type: object
+                required:
+                - guaranteeActive
+                properties:
+                  guaranteeActive:
+                    description: True when physical capacity (not just quota) has been confirmed via a satisfied ProvisioningRequest.
+                    type: boolean
+                  reason:
+                    description: Machine-readable reason for the current state.
+                    type: string
+              multiCluster:
+                description: Manager-side view of multi-cluster dispatch. Populated only when spec.managedBy is set to the MultiKueue controller value. All fields are controller-owned.
+                type: object
+                properties:
+                  dispatchPhase:
+                    description: High-level multi-cluster dispatch state.
+                    type: string
+                    enum:
+                    - Pending
+                    - Dispatched
+                    - Active
+                  nominatedClusters:
+                    description: Worker clusters considered by MultiKueue for dispatch.
+                    type: array
+                    items:
                       type: string
-                      enum:
-                        - ReclaimablePods
-                control:
-                  type: object
-                  properties:
-                    desiredState:
-                      type: string
-                      enum:
-                        - Running
-                        - Paused
-            status:
-              type: object
-              properties:
-                phase:
-                  type: string
-                  enum:
+                  executionCluster:
+                    description: Worker cluster where the RTJ is currently dispatched.
+                    type: string
+                  remoteObjectRef:
+                    description: Reference to the remote RTJ copy on the worker cluster.
+                    type: object
+                    required:
+                    - cluster
+                    - name
+                    properties:
+                      cluster:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                      name:
+                        type: string
+                        minLength: 1
+                      uid:
+                        type: string
+                  remotePhase:
+                    description: Phase observed on the remote worker-side RTJ.
+                    type: string
+                    enum:
                     - Pending
                     - Queued
                     - Admitted
@@ -384,765 +822,1156 @@ spec:
                     - Restoring
                     - Succeeded
                     - Failed
-                conditions:
-                  type: array
-                  items:
+                  remoteCheckpoint:
+                    description: Latest completed checkpoint from the remote worker.
                     type: object
-                    required:
-                      - type
-                      - status
-                      - reason
-                      - message
-                      - lastTransitionTime
                     properties:
-                      type:
+                      lastCompletedCheckpointID:
                         type: string
-                      status:
-                        type: string
-                      observedGeneration:
-                        type: integer
-                        format: int64
-                      lastTransitionTime:
+                      lastCompletedCheckpointTime:
                         type: string
                         format: date-time
-                      reason:
+                      storageURI:
                         type: string
-                      message:
-                        type: string
-                workloadReference:
-                  type: object
-                  required:
-                    - name
-                  properties:
-                    apiVersion:
+                  remoteObservedGeneration:
+                    description: metadata.generation of the remote worker-side RTJ as of the last status mirror. Sync marker for spec propagation.
+                    type: integer
+                    format: int64
+                  localExecutionSuppressed:
+                    description: Indicates manager-mode controller has suppressed local child JobSet creation for this MultiKueue-managed RTJ.
+                    type: boolean
+              devices:
+                description: DRA device allocation state. Populated only when spec.devices is present with mode=DRA. Nil when devices are not configured. All fields are controller-owned.
+                type: object
+                properties:
+                  deviceMode:
+                    description: Observed device mode from spec.devices.mode.
+                    type: string
+                    enum:
+                    - Disabled
+                    - DRA
+                  requestedDeviceClasses:
+                    description: Deduplicated, sorted summary of DeviceClass names referenced across spec.devices.claims.
+                    type: array
+                    items:
                       type: string
-                    kind:
-                      type: string
-                    name:
-                      type: string
-                      minLength: 1
-                    namespace:
-                      type: string
-                admittedClusterQueue:
-                  type: string
-                currentSuspension:
-                  type: object
-                  required:
-                    - suspended
-                  properties:
-                    suspended:
-                      type: boolean
-                    source:
-                      type: string
-                      enum:
-                        - Kueue
-                        - Manual
-                        - Unknown
-                    reason:
-                      type: string
-                    message:
-                      type: string
-                    observedAt:
-                      type: string
-                      format: date-time
-                currentRunAttempt:
-                  type: integer
-                  format: int32
-                pauseRequestID:
-                  type: string
-                activeJobSetName:
-                  type: string
-                activeControlConfigMapName:
-                  type: string
-                selectedCheckpoint:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                    storageURI:
-                      type: string
-                    manifestURI:
-                      type: string
-                    completionTime:
-                      type: string
-                      format: date-time
-                    sourceRunAttempt:
-                      type: integer
-                      format: int32
-                    compatibilityState:
-                      type: string
-                      enum:
-                        - Compatible
-                        - Incompatible
-                        - Unknown
-                    compatibilityReason:
-                      type: string
-                    worldSize:
-                      description: World size recorded in the checkpoint manifest.
-                      type: integer
-                      format: int32
-                lastCompletedCheckpoint:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                    storageURI:
-                      type: string
-                    manifestURI:
-                      type: string
-                    completionTime:
-                      type: string
-                      format: date-time
-                    sourceRunAttempt:
-                      type: integer
-                      format: int32
-                    compatibilityState:
-                      type: string
-                      enum:
-                        - Compatible
-                        - Incompatible
-                        - Unknown
-                    compatibilityReason:
-                      type: string
-                    worldSize:
-                      description: World size recorded in the checkpoint manifest.
-                      type: integer
-                      format: int32
-                transitionTimestamps:
-                  type: object
-                  properties:
-                    lastTransitionTime:
-                      type: string
-                      format: date-time
-                    queuedAt:
-                      type: string
-                      format: date-time
-                    admittedAt:
-                      type: string
-                      format: date-time
-                    startingAt:
-                      type: string
-                      format: date-time
-                    runningAt:
-                      type: string
-                      format: date-time
-                    yieldRequestedAt:
-                      type: string
-                      format: date-time
-                    drainingAt:
-                      type: string
-                      format: date-time
-                    lastCheckpointCompletedAt:
-                      type: string
-                      format: date-time
-                    pausedAt:
-                      type: string
-                      format: date-time
-                    restoringAt:
-                      type: string
-                      format: date-time
-                    restoreCompletedAt:
-                      type: string
-                      format: date-time
-                    succeededAt:
-                      type: string
-                      format: date-time
-                    failedAt:
-                      type: string
-                      format: date-time
-                reason:
-                  type: string
-                message:
-                  type: string
-                observedGeneration:
-                  type: integer
-                  format: int64
-                # Phase 3: admission status
-                admission:
-                  description: Admitted shape from Kueue.
-                  type: object
-                  properties:
-                    admittedWorkerCount:
-                      type: integer
-                      format: int32
-                    preferredWorkerCount:
-                      type: integer
-                      format: int32
-                    activeWorkerCount:
-                      type: integer
-                      format: int32
-                    admittedFlavors:
+                  currentDeviceProfileFingerprint:
+                    description: SHA256 hash of the current device profile for checkpoint compatibility.
+                    type: string
+                  resourceClaimTemplateRefs:
+                    description: Materialized ResourceClaimTemplate references for the current device spec.
+                    type: array
+                    items:
                       type: object
-                      additionalProperties:
+                      required:
+                      - name
+                      - claimName
+                      properties:
+                        name:
+                          description: Kubernetes object name of the generated ResourceClaimTemplate.
+                          type: string
+                          minLength: 1
+                        claimName:
+                          description: DeviceClaimSpec.Name that this template was generated from.
+                          type: string
+                          minLength: 1
+                  claimAllocationState:
+                    description: Aggregate allocation state across all ResourceClaimTemplates.
+                    type: string
+                    enum:
+                    - Pending
+                    - Allocated
+                    - Failed
+                    - Unknown
+                  allocatedClaimCount:
+                    description: Number of claims successfully allocated by the DRA driver.
+                    type: integer
+                    format: int32
+                  lastClaimFailureReason:
+                    description: Machine-readable reason for the most recent claim allocation failure.
+                    type: string
+                  lastClaimFailureTime:
+                    description: When the most recent claim failure occurred.
+                    type: string
+                    format: date-time
+                  lastCheckpointDeviceProfileFingerprint:
+                    description: Device profile fingerprint from the most recent completed checkpoint.
+                    type: string
+                  lastResumeDeviceProfileFingerprint:
+                    description: Device profile fingerprint active when the most recent resume was performed.
+                    type: string
+              elasticity:
+                description: Controller-owned elasticity state. Populated only when spec.elasticity is present with mode != Disabled. Nil when elasticity is not configured (Phase 8 behavior). All fields
+                  are controller-owned.
+                type: object
+                properties:
+                  desiredWorkerCount:
+                    description: Effective preferred count from parallelism.preferredCount or identity.worldSize.
+                    type: integer
+                    format: int32
+                  targetWorkerCount:
+                    description: Mirrors spec.elasticity.targetWorkerCount for observability.
+                    type: integer
+                    format: int32
+                  activeWorkerCount:
+                    description: Observed number of running worker pods.
+                    type: integer
+                    format: int32
+                  admittedWorkerCount:
+                    description: Number of worker pods admitted by Kueue for the scalable worker pod set.
+                    type: integer
+                    format: int32
+                  resizeState:
+                    description: Current state of the resize operation.
+                    type: string
+                    enum:
+                    - Idle
+                    - Pending
+                    - InProgress
+                    - Blocked
+                    - Completed
+                    - Failed
+                  resizeReason:
+                    description: Machine-readable reason for the current resize state.
+                    type: string
+                  currentExecutionMode:
+                    description: Whether the RTJ is in fixed or elastic execution mode.
+                    type: string
+                    enum:
+                    - Fixed
+                    - Elastic
+                  resizePath:
+                    description: Resize execution path chosen for current/most recent resize.
+                    type: string
+                    enum:
+                    - InPlace
+                    - CheckpointAndRelaunch
+                  reclaimableWorkerCount:
+                    description: Workers declared reclaimable via Workload.status.reclaimablePods.
+                    type: integer
+                    format: int32
+                  reclaimablePodsPublished:
+                    description: Whether reclaimablePods has been written to the Workload status.
+                    type: boolean
+                  inPlaceShrinkSupported:
+                    description: Whether the runtime advertises in-place shrink support.
+                    type: boolean
+                  lastResizeEvent:
+                    description: Description of the most recent resize event.
+                    type: string
+                  lastResizeCheckpoint:
+                    description: Checkpoint from the most recent C&R resize. Nil when the last resize was in-place or no resize has occurred.
+                    type: object
+                    properties:
+                      id:
                         type: string
-                # Phase 3: restore status
-                restore:
-                  description: Details of the most recent checkpoint restore.
-                  type: object
-                  properties:
-                    lastCheckpointWorldSize:
-                      type: integer
-                      format: int32
-                    lastRestoreWorldSize:
-                      type: integer
-                      format: int32
-                    restoreMode:
-                      type: string
-                      enum:
-                        - SameSize
-                        - Reshard
-                # Phase 4: launch readiness
-                launchReadiness:
-                  description: >-
-                    Pre-launch readiness state set by the ResumeReadiness
-                    AdmissionCheck controller. Nil when readiness gate is not active.
-                  type: object
-                  required:
-                    - ready
-                  properties:
-                    ready:
-                      type: boolean
-                    gateState:
-                      type: string
-                      enum:
-                        - Pending
-                        - Ready
-                        - Rejected
-                    reason:
-                      type: string
-                    message:
-                      type: string
-                    lastTransitionTime:
-                      type: string
-                      format: date-time
-                # Phase 4: topology status
-                topology:
-                  description: >-
-                    Admitted topology assignment from Kueue TAS.
-                    Nil when topology is not enabled or not yet admitted.
-                  type: object
-                  properties:
-                    levels:
-                      type: array
-                      items:
+                        minLength: 1
+                      storageURI:
                         type: string
-                    domains:
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          values:
-                            type: array
-                            items:
-                              type: string
-                          count:
-                            type: integer
-                            format: int32
-                # Phase 4: effective launch shape
-                effectiveLaunchShape:
-                  description: >-
-                    Computed launch shape derived from admission decisions.
-                    Nil before first admission.
-                  type: object
-                  properties:
-                    workerCount:
-                      type: integer
-                      format: int32
-                    worldSize:
-                      type: integer
-                      format: int32
-                    resumeMode:
-                      type: string
-                      enum:
-                        - SameSize
-                        - Reshard
-                    selectedCheckpointID:
-                      type: string
-                # Phase 5: priority shaping status
-                priorityShaping:
-                  description: >-
-                    Checkpoint-aware priority shaping state. Nil when no
-                    CheckpointPriorityPolicy is referenced.
-                  type: object
-                  properties:
-                    basePriority:
-                      description: Static priority from the WorkloadPriorityClass.
-                      type: integer
-                      format: int32
-                    effectivePriority:
-                      description: Dynamically computed priority written to Workload.Spec.Priority.
-                      type: integer
-                      format: int32
-                    preemptionState:
-                      description: Current preemption lifecycle state.
-                      type: string
-                      enum:
-                        - Protected
-                        - Active
-                        - Cooldown
-                        - Preemptible
-                    preemptionStateReason:
-                      description: Machine-readable reason for the current preemption state.
-                      type: string
-                    protectedUntil:
-                      description: Timestamp until which the startup protection window is active.
-                      type: string
-                      format: date-time
-                    lastCompletedCheckpointTime:
-                      description: Completion timestamp of the most recent checkpoint.
-                      type: string
-                      format: date-time
-                    checkpointAge:
-                      description: Age of the most recent checkpoint as a duration string.
-                      type: string
-                    lastYieldTime:
-                      description: Timestamp of the most recent yield (preemption).
-                      type: string
-                      format: date-time
-                    lastResumeTime:
-                      description: Timestamp of the most recent resume.
-                      type: string
-                      format: date-time
-                    recentYieldCount:
-                      description: Number of yields within the policy's yieldWindow.
-                      type: integer
-                      format: int32
-                    appliedPolicyRef:
-                      description: Name of the CheckpointPriorityPolicy last used to compute effective priority.
-                      type: string
-                # Phase 7: launch gate status
-                launchGate:
-                  description: >-
-                    Aggregate launch gate evaluation state. Determines when the
-                    controller may render the child JobSet. All fields are
-                    controller-owned. Nil before the first admission attempt.
-                  type: object
-                  properties:
-                    launchGateState:
-                      description: >-
-                        Aggregate launch gate state: Open, Blocked, or Unknown.
-                      type: string
-                      enum:
-                        - Open
-                        - Blocked
-                        - Unknown
-                    launchGateReason:
-                      description: Machine-readable reason for the current gate state.
-                      type: string
-                    message:
-                      description: Human-readable explanation of the current gate state.
-                      type: string
-                    admissionCheckSummary:
-                      description: >-
-                        Maps admission check name to its state. Empty when no
-                        AdmissionChecks are configured (Phase 6 fail-open).
-                      type: object
-                      additionalProperties:
+                        minLength: 1
+                      manifestURI:
+                        type: string
+                      completionTime:
+                        type: string
+                        format: date-time
+                      sourceRunAttempt:
+                        type: integer
+                        format: int32
+                      compatibilityState:
                         type: string
                         enum:
-                          - Pending
-                          - Ready
-                          - Retry
-                          - Rejected
-                    topologyGateState:
-                      description: >-
-                        Whether the topology assignment prerequisite is satisfied.
-                      type: string
-                      enum:
-                        - NotConfigured
-                        - Pending
-                        - Assigned
-                    lastTransitionTime:
-                      description: When the launch gate state last changed.
-                      type: string
-                      format: date-time
-                # Phase 7: provisioning status
-                provisioning:
-                  description: >-
-                    State of the ProvisioningRequest AdmissionCheck gate.
-                    Derived from Workload AdmissionCheck state. All fields are
-                    controller-owned. Nil when not configured or not yet evaluated.
-                  type: object
-                  properties:
-                    provisioningState:
-                      description: >-
-                        Current provisioning gate state.
-                      type: string
-                      enum:
-                        - NotConfigured
-                        - Pending
-                        - Provisioned
-                        - Failed
-                    provisioningRequestRef:
-                      description: >-
-                        Reference to the ProvisioningRequest resource created by
-                        Kueue for this workload.
+                        - Compatible
+                        - Incompatible
+                        - Unknown
+                      compatibilityReason:
+                        type: string
+                      worldSize:
+                        type: integer
+                        format: int32
+                  lastResizeFailureReason:
+                    description: Reason for the most recent resize failure.
+                    type: string
+                  lastElasticTransitionTime:
+                    description: When the elasticity state last changed.
+                    type: string
+                    format: date-time
+                  lastResizeCompletedTime:
+                    description: When the most recent resize completed successfully.
+                    type: string
+                    format: date-time
+  - name: v1beta1
+    served: true
+    storage: true
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: Phase
+      type: string
+      jsonPath: .status.phase
+    - name: Desired
+      type: string
+      jsonPath: .spec.control.desiredState
+    - name: Suspended
+      type: boolean
+      jsonPath: .spec.suspend
+    - name: Queue
+      type: string
+      jsonPath: .spec.queueName
+    - name: Attempt
+      type: integer
+      jsonPath: .status.currentRunAttempt
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            required:
+            - queueName
+            - workloadPriorityClassName
+            - identity
+            - runtime
+            - checkpoint
+            - resume
+            properties:
+              suspend:
+                type: boolean
+              queueName:
+                type: string
+                minLength: 1
+              workloadPriorityClassName:
+                type: string
+                minLength: 1
+              identity:
+                type: object
+                required:
+                - image
+                - codeVersion
+                - worldSize
+                - gpuShape
+                properties:
+                  image:
+                    type: string
+                    minLength: 1
+                  codeVersion:
+                    type: string
+                    minLength: 1
+                  worldSize:
+                    type: integer
+                    format: int32
+                    minimum: 1
+                  gpuShape:
+                    type: string
+                    minLength: 1
+              runtime:
+                type: object
+                required:
+                - mode
+                - optimizerMode
+                - shardingMode
+                - template
+                properties:
+                  mode:
+                    type: string
+                    enum:
+                    - DDP
+                    - FSDP
+                  optimizerMode:
+                    type: string
+                    minLength: 1
+                  shardingMode:
+                    type: string
+                    minLength: 1
+                  template:
+                    type: object
+                    required:
+                    - spec
+                    properties:
+                      apiVersion:
+                        type: string
+                      kind:
+                        type: string
+                        enum:
+                        - JobSet
+                      metadata:
+                        type: object
+                        properties:
+                          labels:
+                            type: object
+                            additionalProperties:
+                              type: string
+                          annotations:
+                            type: object
+                            additionalProperties:
+                              type: string
+                      spec:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+              checkpoint:
+                type: object
+                required:
+                - storageURI
+                - interval
+                - freshnessBudget
+                - maxDrainTime
+                properties:
+                  storageURI:
+                    type: string
+                    minLength: 1
+                  interval:
+                    type: string
+                  freshnessBudget:
+                    type: string
+                  maxDrainTime:
+                    type: string
+                  safePointMode:
+                    type: string
+                    enum:
+                    - StepBoundary
+              resume:
+                type: object
+                required:
+                - maxResumeRetries
+                properties:
+                  sourcePolicy:
+                    type: string
+                    enum:
+                    - LatestCompatibleComplete
+                  maxResumeRetries:
+                    type: integer
+                    format: int32
+                    minimum: 1
+                  allowWorldSizeChange:
+                    description: Permits resuming from a checkpoint saved at a different world size. Requires PyTorch DCP resharding.
+                    type: boolean
+              parallelism:
+                description: Configures scalable worker group and partial admission. When absent, worker count derives from identity.worldSize.
+                type: object
+                properties:
+                  preferredCount:
+                    type: integer
+                    format: int32
+                    minimum: 1
+                  minCount:
+                    type: integer
+                    format: int32
+                    minimum: 1
+                  podSetName:
+                    type: string
+                  enablePartialAdmission:
+                    type: boolean
+              topology:
+                description: Declares topology placement requirements. When absent or mode is Disabled, topology-aware scheduling is off (Phase 3 behavior preserved).
+                type: object
+                required:
+                - mode
+                properties:
+                  mode:
+                    description: Topology placement mode for the worker pod set.
+                    type: string
+                    enum:
+                    - Disabled
+                    - Required
+                    - Preferred
+                    - Unconstrained
+                  topologyLevel:
+                    description: Node label key used as the topology domain. Required when mode is Required or Preferred.
+                    type: string
+                  leaderWorkerColocation:
+                    description: Requests leader pod co-location in the same topology domain as workers. Only meaningful when mode is Required, Preferred, or Unconstrained.
+                    type: boolean
+              managedBy:
+                description: Identifies the external controller responsible for this RTJ's Workload lifecycle. When set to "kueue.x-k8s.io/multikueue", the RTJ is eligible for MultiKueue dispatch. When
+                  empty or absent, single-cluster Phase 5 behavior is preserved. Immutable once set.
+                type: string
+                maxLength: 256
+              priorityPolicyRef:
+                description: Optional reference to a cluster-scoped CheckpointPriorityPolicy that configures checkpoint-aware priority shaping. When absent, no priority shaping is applied (Phase 4 behavior
+                  preserved).
+                type: object
+                required:
+                - name
+                properties:
+                  name:
+                    type: string
+                    minLength: 1
+              devices:
+                description: Declares DRA device requirements for worker pods. When present with mode=DRA, the operator creates companion ResourceClaimTemplate objects. When absent or mode=Disabled, Phase
+                  7 behavior is preserved unchanged.
+                type: object
+                required:
+                - mode
+                properties:
+                  mode:
+                    description: 'Device allocation mode. Disabled: no DRA claims. DRA: native DRA ResourceClaimTemplate generation.'
+                    type: string
+                    enum:
+                    - Disabled
+                    - DRA
+                  claims:
+                    description: Per-worker ResourceClaimTemplate specs. Each entry produces a companion ResourceClaimTemplate owned by the RTJ. Required when mode is DRA.
+                    type: array
+                    items:
                       type: object
                       required:
-                        - name
+                      - name
+                      - containers
+                      - request
                       properties:
                         name:
+                          description: Unique identifier for this claim within the RTJ. Used as suffix for the generated ResourceClaimTemplate name.
                           type: string
                           minLength: 1
-                        namespace:
-                          type: string
-                    provisioningAttempt:
-                      description: >-
-                        Number of provisioning attempts observed.
-                      type: integer
-                      format: int32
-                    reason:
-                      description: Machine-readable reason for the current state.
-                      type: string
-                    message:
-                      description: Human-readable explanation of the current state.
-                      type: string
-                    provisioningLastTransitionTime:
-                      description: When the provisioning state last changed.
-                      type: string
-                      format: date-time
-                # Phase 7: startup/recovery status
-                startupRecovery:
-                  description: >-
-                    Startup and recovery lifecycle state of the child runtime.
-                    Integrates with Kueue waitForPodsReady eviction signals.
-                    All fields are controller-owned. Nil before the first launch.
-                  type: object
-                  properties:
-                    startupState:
-                      description: Current startup/recovery state.
-                      type: string
-                      enum:
-                        - NotStarted
-                        - Starting
-                        - Running
-                        - StartupTimedOut
-                        - RecoveryTimedOut
-                        - Evicted
-                    podsReadyState:
-                      description: Derived pod readiness indicator.
-                      type: string
-                      enum:
-                        - Unknown
-                        - PodsReady
-                        - PodsNotReady
-                        - NoRuntime
-                    lastLaunchFailureReason:
-                      description: >-
-                        Machine-readable reason for the most recent launch failure.
-                      type: string
-                    lastEvictionReason:
-                      description: >-
-                        Machine-readable reason for the most recent Kueue eviction.
-                      type: string
-                    lastRequeueReason:
-                      description: >-
-                        Machine-readable reason for the most recent requeue.
-                      type: string
-                    lastTransitionTime:
-                      description: When the startup state last changed.
-                      type: string
-                      format: date-time
-                # Phase 7: capacity status
-                capacity:
-                  description: >-
-                    Derived indicator of whether a physical capacity guarantee
-                    is active. Computed from admission and provisioning state.
-                    All fields are controller-owned. Nil before first evaluation.
+                          maxLength: 63
+                          pattern: ^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$
+                        containers:
+                          description: Container names within the worker pod template that should receive this claim.
+                          type: array
+                          minItems: 1
+                          items:
+                            type: string
+                        request:
+                          description: Constrained DRA device request fragment copied into the generated ResourceClaimTemplate.
+                          type: object
+                          required:
+                          - deviceClassName
+                          properties:
+                            deviceClassName:
+                              description: DRA DeviceClass name. Must match a DeviceClass installed in the cluster.
+                              type: string
+                              minLength: 1
+                            count:
+                              description: 'Number of devices requested per worker pod. Default: 1.'
+                              type: integer
+                              format: int32
+                              minimum: 1
+                              default: 1
+                            selectors:
+                              description: CEL-expression selectors for device attributes. All selectors must match.
+                              type: array
+                              items:
+                                type: string
+              elasticity:
+                description: Configures manual target-based worker-count resize. When nil or mode is Disabled, Phase 8 behavior is preserved (fixed worker count at admission time).
+                type: object
+                required:
+                - mode
+                properties:
+                  mode:
+                    description: 'Elasticity mode. Disabled: no elasticity (Phase 8). Manual: operator-initiated target-based resize.'
+                    type: string
+                    enum:
+                    - Disabled
+                    - Manual
+                  targetWorkerCount:
+                    description: Desired worker count. Must be >= minCount and <= preferredCount. Only meaningful when mode is Manual.
+                    type: integer
+                    format: int32
+                    minimum: 1
+                  inPlaceShrinkPolicy:
+                    description: 'Controls in-place shrink behavior. IfSupported: try in-place first, fall back to C&R. Never: always C&R.'
+                    type: string
+                    enum:
+                    - IfSupported
+                    - Never
+                  reclaimMode:
+                    description: Controls quota release mechanism for in-place shrink. Only ReclaimablePods is supported.
+                    type: string
+                    enum:
+                    - ReclaimablePods
+              control:
+                type: object
+                properties:
+                  desiredState:
+                    type: string
+                    enum:
+                    - Running
+                    - Paused
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+                enum:
+                - Pending
+                - Queued
+                - Admitted
+                - Starting
+                - Running
+                - YieldRequested
+                - Draining
+                - Paused
+                - Restoring
+                - Succeeded
+                - Failed
+              conditions:
+                type: array
+                items:
                   type: object
                   required:
-                    - guaranteeActive
+                  - type
+                  - status
+                  - reason
+                  - message
+                  - lastTransitionTime
                   properties:
-                    guaranteeActive:
-                      description: >-
-                        True when physical capacity (not just quota) has been
-                        confirmed via a satisfied ProvisioningRequest.
-                      type: boolean
-                    reason:
-                      description: Machine-readable reason for the current state.
+                    type:
                       type: string
-                # Phase 6: multi-cluster status
-                multiCluster:
-                  description: >-
-                    Manager-side view of multi-cluster dispatch. Populated only
-                    when spec.managedBy is set to the MultiKueue controller value.
-                    All fields are controller-owned.
-                  type: object
-                  properties:
-                    dispatchPhase:
-                      description: High-level multi-cluster dispatch state.
+                    status:
                       type: string
-                      enum:
-                        - Pending
-                        - Dispatched
-                        - Active
-                    nominatedClusters:
-                      description: Worker clusters considered by MultiKueue for dispatch.
-                      type: array
-                      items:
-                        type: string
-                    executionCluster:
-                      description: Worker cluster where the RTJ is currently dispatched.
-                      type: string
-                    remoteObjectRef:
-                      description: Reference to the remote RTJ copy on the worker cluster.
-                      type: object
-                      required:
-                        - cluster
-                        - name
-                      properties:
-                        cluster:
-                          type: string
-                          minLength: 1
-                        namespace:
-                          type: string
-                        name:
-                          type: string
-                          minLength: 1
-                        uid:
-                          type: string
-                    remotePhase:
-                      description: Phase observed on the remote worker-side RTJ.
-                      type: string
-                      enum:
-                        - Pending
-                        - Queued
-                        - Admitted
-                        - Starting
-                        - Running
-                        - YieldRequested
-                        - Draining
-                        - Paused
-                        - Restoring
-                        - Succeeded
-                        - Failed
-                    remoteCheckpoint:
-                      description: Latest completed checkpoint from the remote worker.
-                      type: object
-                      properties:
-                        lastCompletedCheckpointID:
-                          type: string
-                        lastCompletedCheckpointTime:
-                          type: string
-                          format: date-time
-                        storageURI:
-                          type: string
-                    remoteObservedGeneration:
-                      description: >-
-                        metadata.generation of the remote worker-side RTJ as of
-                        the last status mirror. Sync marker for spec propagation.
+                    observedGeneration:
                       type: integer
                       format: int64
-                    localExecutionSuppressed:
-                      description: >-
-                        Indicates manager-mode controller has suppressed local
-                        child JobSet creation for this MultiKueue-managed RTJ.
-                      type: boolean
-                # Phase 8: device status
-                devices:
-                  description: >-
-                    DRA device allocation state. Populated only when
-                    spec.devices is present with mode=DRA. Nil when devices
-                    are not configured. All fields are controller-owned.
-                  type: object
-                  properties:
-                    deviceMode:
-                      description: Observed device mode from spec.devices.mode.
-                      type: string
-                      enum:
-                        - Disabled
-                        - DRA
-                    requestedDeviceClasses:
-                      description: >-
-                        Deduplicated, sorted summary of DeviceClass names
-                        referenced across spec.devices.claims.
-                      type: array
-                      items:
-                        type: string
-                    currentDeviceProfileFingerprint:
-                      description: >-
-                        SHA256 hash of the current device profile for
-                        checkpoint compatibility.
-                      type: string
-                    resourceClaimTemplateRefs:
-                      description: >-
-                        Materialized ResourceClaimTemplate references for the
-                        current device spec.
-                      type: array
-                      items:
-                        type: object
-                        required:
-                          - name
-                          - claimName
-                        properties:
-                          name:
-                            description: >-
-                              Kubernetes object name of the generated
-                              ResourceClaimTemplate.
-                            type: string
-                            minLength: 1
-                          claimName:
-                            description: >-
-                              DeviceClaimSpec.Name that this template was
-                              generated from.
-                            type: string
-                            minLength: 1
-                    claimAllocationState:
-                      description: >-
-                        Aggregate allocation state across all
-                        ResourceClaimTemplates.
-                      type: string
-                      enum:
-                        - Pending
-                        - Allocated
-                        - Failed
-                        - Unknown
-                    allocatedClaimCount:
-                      description: >-
-                        Number of claims successfully allocated by the
-                        DRA driver.
-                      type: integer
-                      format: int32
-                    lastClaimFailureReason:
-                      description: >-
-                        Machine-readable reason for the most recent claim
-                        allocation failure.
-                      type: string
-                    lastClaimFailureTime:
-                      description: When the most recent claim failure occurred.
+                    lastTransitionTime:
                       type: string
                       format: date-time
-                    lastCheckpointDeviceProfileFingerprint:
-                      description: >-
-                        Device profile fingerprint from the most recent
-                        completed checkpoint.
+                    reason:
                       type: string
-                    lastResumeDeviceProfileFingerprint:
-                      description: >-
-                        Device profile fingerprint active when the most
-                        recent resume was performed.
+                    message:
                       type: string
-                # Phase 9: elasticity status
-                elasticity:
-                  description: >-
-                    Controller-owned elasticity state. Populated only when
-                    spec.elasticity is present with mode != Disabled. Nil when
-                    elasticity is not configured (Phase 8 behavior). All fields
-                    are controller-owned.
-                  type: object
-                  properties:
-                    desiredWorkerCount:
-                      description: >-
-                        Effective preferred count from parallelism.preferredCount
-                        or identity.worldSize.
-                      type: integer
-                      format: int32
-                    targetWorkerCount:
-                      description: >-
-                        Mirrors spec.elasticity.targetWorkerCount for
-                        observability.
-                      type: integer
-                      format: int32
-                    activeWorkerCount:
-                      description: Observed number of running worker pods.
-                      type: integer
-                      format: int32
-                    admittedWorkerCount:
-                      description: >-
-                        Number of worker pods admitted by Kueue for the
-                        scalable worker pod set.
-                      type: integer
-                      format: int32
-                    resizeState:
-                      description: Current state of the resize operation.
+              workloadReference:
+                type: object
+                required:
+                - name
+                properties:
+                  apiVersion:
+                    type: string
+                  kind:
+                    type: string
+                  name:
+                    type: string
+                    minLength: 1
+                  namespace:
+                    type: string
+              admittedClusterQueue:
+                type: string
+              currentSuspension:
+                type: object
+                required:
+                - suspended
+                properties:
+                  suspended:
+                    type: boolean
+                  source:
+                    type: string
+                    enum:
+                    - Kueue
+                    - Manual
+                    - Unknown
+                  reason:
+                    type: string
+                  message:
+                    type: string
+                  observedAt:
+                    type: string
+                    format: date-time
+              currentRunAttempt:
+                type: integer
+                format: int32
+              pauseRequestID:
+                type: string
+              activeJobSetName:
+                type: string
+              activeControlConfigMapName:
+                type: string
+              selectedCheckpoint:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  storageURI:
+                    type: string
+                  manifestURI:
+                    type: string
+                  completionTime:
+                    type: string
+                    format: date-time
+                  sourceRunAttempt:
+                    type: integer
+                    format: int32
+                  compatibilityState:
+                    type: string
+                    enum:
+                    - Compatible
+                    - Incompatible
+                    - Unknown
+                  compatibilityReason:
+                    type: string
+                  worldSize:
+                    description: World size recorded in the checkpoint manifest.
+                    type: integer
+                    format: int32
+              lastCompletedCheckpoint:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  storageURI:
+                    type: string
+                  manifestURI:
+                    type: string
+                  completionTime:
+                    type: string
+                    format: date-time
+                  sourceRunAttempt:
+                    type: integer
+                    format: int32
+                  compatibilityState:
+                    type: string
+                    enum:
+                    - Compatible
+                    - Incompatible
+                    - Unknown
+                  compatibilityReason:
+                    type: string
+                  worldSize:
+                    description: World size recorded in the checkpoint manifest.
+                    type: integer
+                    format: int32
+              transitionTimestamps:
+                type: object
+                properties:
+                  lastTransitionTime:
+                    type: string
+                    format: date-time
+                  queuedAt:
+                    type: string
+                    format: date-time
+                  admittedAt:
+                    type: string
+                    format: date-time
+                  startingAt:
+                    type: string
+                    format: date-time
+                  runningAt:
+                    type: string
+                    format: date-time
+                  yieldRequestedAt:
+                    type: string
+                    format: date-time
+                  drainingAt:
+                    type: string
+                    format: date-time
+                  lastCheckpointCompletedAt:
+                    type: string
+                    format: date-time
+                  pausedAt:
+                    type: string
+                    format: date-time
+                  restoringAt:
+                    type: string
+                    format: date-time
+                  restoreCompletedAt:
+                    type: string
+                    format: date-time
+                  succeededAt:
+                    type: string
+                    format: date-time
+                  failedAt:
+                    type: string
+                    format: date-time
+              reason:
+                type: string
+              message:
+                type: string
+              observedGeneration:
+                type: integer
+                format: int64
+              admission:
+                description: Admitted shape from Kueue.
+                type: object
+                properties:
+                  admittedWorkerCount:
+                    type: integer
+                    format: int32
+                  preferredWorkerCount:
+                    type: integer
+                    format: int32
+                  activeWorkerCount:
+                    type: integer
+                    format: int32
+                  admittedFlavors:
+                    type: object
+                    additionalProperties:
                       type: string
-                      enum:
-                        - Idle
-                        - Pending
-                        - InProgress
-                        - Blocked
-                        - Completed
-                        - Failed
-                    resizeReason:
-                      description: >-
-                        Machine-readable reason for the current resize state.
+              restore:
+                description: Details of the most recent checkpoint restore.
+                type: object
+                properties:
+                  lastCheckpointWorldSize:
+                    type: integer
+                    format: int32
+                  lastRestoreWorldSize:
+                    type: integer
+                    format: int32
+                  restoreMode:
+                    type: string
+                    enum:
+                    - SameSize
+                    - Reshard
+              launchReadiness:
+                description: Pre-launch readiness state set by the ResumeReadiness AdmissionCheck controller. Nil when readiness gate is not active.
+                type: object
+                required:
+                - ready
+                properties:
+                  ready:
+                    type: boolean
+                  gateState:
+                    type: string
+                    enum:
+                    - Pending
+                    - Ready
+                    - Rejected
+                  reason:
+                    type: string
+                  message:
+                    type: string
+                  lastTransitionTime:
+                    type: string
+                    format: date-time
+              topology:
+                description: Admitted topology assignment from Kueue TAS. Nil when topology is not enabled or not yet admitted.
+                type: object
+                properties:
+                  levels:
+                    type: array
+                    items:
                       type: string
-                    currentExecutionMode:
-                      description: >-
-                        Whether the RTJ is in fixed or elastic execution mode.
-                      type: string
-                      enum:
-                        - Fixed
-                        - Elastic
-                    resizePath:
-                      description: >-
-                        Resize execution path chosen for current/most recent
-                        resize.
-                      type: string
-                      enum:
-                        - InPlace
-                        - CheckpointAndRelaunch
-                    reclaimableWorkerCount:
-                      description: >-
-                        Workers declared reclaimable via
-                        Workload.status.reclaimablePods.
-                      type: integer
-                      format: int32
-                    reclaimablePodsPublished:
-                      description: >-
-                        Whether reclaimablePods has been written to the
-                        Workload status.
-                      type: boolean
-                    inPlaceShrinkSupported:
-                      description: >-
-                        Whether the runtime advertises in-place shrink support.
-                      type: boolean
-                    lastResizeEvent:
-                      description: >-
-                        Description of the most recent resize event.
-                      type: string
-                    lastResizeCheckpoint:
-                      description: >-
-                        Checkpoint from the most recent C&R resize. Nil when
-                        the last resize was in-place or no resize has occurred.
+                  domains:
+                    type: array
+                    items:
                       type: object
                       properties:
-                        id:
-                          type: string
-                          minLength: 1
-                        storageURI:
-                          type: string
-                          minLength: 1
-                        manifestURI:
-                          type: string
-                        completionTime:
-                          type: string
-                          format: date-time
-                        sourceRunAttempt:
+                        values:
+                          type: array
+                          items:
+                            type: string
+                        count:
                           type: integer
                           format: int32
-                        compatibilityState:
+              effectiveLaunchShape:
+                description: Computed launch shape derived from admission decisions. Nil before first admission.
+                type: object
+                properties:
+                  workerCount:
+                    type: integer
+                    format: int32
+                  worldSize:
+                    type: integer
+                    format: int32
+                  resumeMode:
+                    type: string
+                    enum:
+                    - SameSize
+                    - Reshard
+                  selectedCheckpointID:
+                    type: string
+              priorityShaping:
+                description: Checkpoint-aware priority shaping state. Nil when no CheckpointPriorityPolicy is referenced.
+                type: object
+                properties:
+                  basePriority:
+                    description: Static priority from the WorkloadPriorityClass.
+                    type: integer
+                    format: int32
+                  effectivePriority:
+                    description: Dynamically computed priority written to Workload.Spec.Priority.
+                    type: integer
+                    format: int32
+                  preemptionState:
+                    description: Current preemption lifecycle state.
+                    type: string
+                    enum:
+                    - Protected
+                    - Active
+                    - Cooldown
+                    - Preemptible
+                  preemptionStateReason:
+                    description: Machine-readable reason for the current preemption state.
+                    type: string
+                  protectedUntil:
+                    description: Timestamp until which the startup protection window is active.
+                    type: string
+                    format: date-time
+                  lastCompletedCheckpointTime:
+                    description: Completion timestamp of the most recent checkpoint.
+                    type: string
+                    format: date-time
+                  checkpointAge:
+                    description: Age of the most recent checkpoint as a duration string.
+                    type: string
+                  lastYieldTime:
+                    description: Timestamp of the most recent yield (preemption).
+                    type: string
+                    format: date-time
+                  lastResumeTime:
+                    description: Timestamp of the most recent resume.
+                    type: string
+                    format: date-time
+                  recentYieldCount:
+                    description: Number of yields within the policy's yieldWindow.
+                    type: integer
+                    format: int32
+                  appliedPolicyRef:
+                    description: Name of the CheckpointPriorityPolicy last used to compute effective priority.
+                    type: string
+              launchGate:
+                description: Aggregate launch gate evaluation state. Determines when the controller may render the child JobSet. All fields are controller-owned. Nil before the first admission attempt.
+                type: object
+                properties:
+                  launchGateState:
+                    description: 'Aggregate launch gate state: Open, Blocked, or Unknown.'
+                    type: string
+                    enum:
+                    - Open
+                    - Blocked
+                    - Unknown
+                  launchGateReason:
+                    description: Machine-readable reason for the current gate state.
+                    type: string
+                  message:
+                    description: Human-readable explanation of the current gate state.
+                    type: string
+                  admissionCheckSummary:
+                    description: Maps admission check name to its state. Empty when no AdmissionChecks are configured (Phase 6 fail-open).
+                    type: object
+                    additionalProperties:
+                      type: string
+                      enum:
+                      - Pending
+                      - Ready
+                      - Retry
+                      - Rejected
+                  topologyGateState:
+                    description: Whether the topology assignment prerequisite is satisfied.
+                    type: string
+                    enum:
+                    - NotConfigured
+                    - Pending
+                    - Assigned
+                  lastTransitionTime:
+                    description: When the launch gate state last changed.
+                    type: string
+                    format: date-time
+              provisioning:
+                description: State of the ProvisioningRequest AdmissionCheck gate. Derived from Workload AdmissionCheck state. All fields are controller-owned. Nil when not configured or not yet evaluated.
+                type: object
+                properties:
+                  provisioningState:
+                    description: Current provisioning gate state.
+                    type: string
+                    enum:
+                    - NotConfigured
+                    - Pending
+                    - Provisioned
+                    - Failed
+                  provisioningRequestRef:
+                    description: Reference to the ProvisioningRequest resource created by Kueue for this workload.
+                    type: object
+                    required:
+                    - name
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                  provisioningAttempt:
+                    description: Number of provisioning attempts observed.
+                    type: integer
+                    format: int32
+                  reason:
+                    description: Machine-readable reason for the current state.
+                    type: string
+                  message:
+                    description: Human-readable explanation of the current state.
+                    type: string
+                  provisioningLastTransitionTime:
+                    description: When the provisioning state last changed.
+                    type: string
+                    format: date-time
+              startupRecovery:
+                description: Startup and recovery lifecycle state of the child runtime. Integrates with Kueue waitForPodsReady eviction signals. All fields are controller-owned. Nil before the first launch.
+                type: object
+                properties:
+                  startupState:
+                    description: Current startup/recovery state.
+                    type: string
+                    enum:
+                    - NotStarted
+                    - Starting
+                    - Running
+                    - StartupTimedOut
+                    - RecoveryTimedOut
+                    - Evicted
+                  podsReadyState:
+                    description: Derived pod readiness indicator.
+                    type: string
+                    enum:
+                    - Unknown
+                    - PodsReady
+                    - PodsNotReady
+                    - NoRuntime
+                  lastLaunchFailureReason:
+                    description: Machine-readable reason for the most recent launch failure.
+                    type: string
+                  lastEvictionReason:
+                    description: Machine-readable reason for the most recent Kueue eviction.
+                    type: string
+                  lastRequeueReason:
+                    description: Machine-readable reason for the most recent requeue.
+                    type: string
+                  lastTransitionTime:
+                    description: When the startup state last changed.
+                    type: string
+                    format: date-time
+              capacity:
+                description: Derived indicator of whether a physical capacity guarantee is active. Computed from admission and provisioning state. All fields are controller-owned. Nil before first evaluation.
+                type: object
+                required:
+                - guaranteeActive
+                properties:
+                  guaranteeActive:
+                    description: True when physical capacity (not just quota) has been confirmed via a satisfied ProvisioningRequest.
+                    type: boolean
+                  reason:
+                    description: Machine-readable reason for the current state.
+                    type: string
+              multiCluster:
+                description: Manager-side view of multi-cluster dispatch. Populated only when spec.managedBy is set to the MultiKueue controller value. All fields are controller-owned.
+                type: object
+                properties:
+                  dispatchPhase:
+                    description: High-level multi-cluster dispatch state.
+                    type: string
+                    enum:
+                    - Pending
+                    - Dispatched
+                    - Active
+                  nominatedClusters:
+                    description: Worker clusters considered by MultiKueue for dispatch.
+                    type: array
+                    items:
+                      type: string
+                  executionCluster:
+                    description: Worker cluster where the RTJ is currently dispatched.
+                    type: string
+                  remoteObjectRef:
+                    description: Reference to the remote RTJ copy on the worker cluster.
+                    type: object
+                    required:
+                    - cluster
+                    - name
+                    properties:
+                      cluster:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                      name:
+                        type: string
+                        minLength: 1
+                      uid:
+                        type: string
+                  remotePhase:
+                    description: Phase observed on the remote worker-side RTJ.
+                    type: string
+                    enum:
+                    - Pending
+                    - Queued
+                    - Admitted
+                    - Starting
+                    - Running
+                    - YieldRequested
+                    - Draining
+                    - Paused
+                    - Restoring
+                    - Succeeded
+                    - Failed
+                  remoteCheckpoint:
+                    description: Latest completed checkpoint from the remote worker.
+                    type: object
+                    properties:
+                      lastCompletedCheckpointID:
+                        type: string
+                      lastCompletedCheckpointTime:
+                        type: string
+                        format: date-time
+                      storageURI:
+                        type: string
+                  remoteObservedGeneration:
+                    description: metadata.generation of the remote worker-side RTJ as of the last status mirror. Sync marker for spec propagation.
+                    type: integer
+                    format: int64
+                  localExecutionSuppressed:
+                    description: Indicates manager-mode controller has suppressed local child JobSet creation for this MultiKueue-managed RTJ.
+                    type: boolean
+              devices:
+                description: DRA device allocation state. Populated only when spec.devices is present with mode=DRA. Nil when devices are not configured. All fields are controller-owned.
+                type: object
+                properties:
+                  deviceMode:
+                    description: Observed device mode from spec.devices.mode.
+                    type: string
+                    enum:
+                    - Disabled
+                    - DRA
+                  requestedDeviceClasses:
+                    description: Deduplicated, sorted summary of DeviceClass names referenced across spec.devices.claims.
+                    type: array
+                    items:
+                      type: string
+                  currentDeviceProfileFingerprint:
+                    description: SHA256 hash of the current device profile for checkpoint compatibility.
+                    type: string
+                  resourceClaimTemplateRefs:
+                    description: Materialized ResourceClaimTemplate references for the current device spec.
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - name
+                      - claimName
+                      properties:
+                        name:
+                          description: Kubernetes object name of the generated ResourceClaimTemplate.
                           type: string
-                          enum:
-                            - Compatible
-                            - Incompatible
-                            - Unknown
-                        compatibilityReason:
+                          minLength: 1
+                        claimName:
+                          description: DeviceClaimSpec.Name that this template was generated from.
                           type: string
-                        worldSize:
-                          type: integer
-                          format: int32
-                    lastResizeFailureReason:
-                      description: >-
-                        Reason for the most recent resize failure.
-                      type: string
-                    lastElasticTransitionTime:
-                      description: >-
-                        When the elasticity state last changed.
-                      type: string
-                      format: date-time
-                    lastResizeCompletedTime:
-                      description: >-
-                        When the most recent resize completed successfully.
-                      type: string
-                      format: date-time
+                          minLength: 1
+                  claimAllocationState:
+                    description: Aggregate allocation state across all ResourceClaimTemplates.
+                    type: string
+                    enum:
+                    - Pending
+                    - Allocated
+                    - Failed
+                    - Unknown
+                  allocatedClaimCount:
+                    description: Number of claims successfully allocated by the DRA driver.
+                    type: integer
+                    format: int32
+                  lastClaimFailureReason:
+                    description: Machine-readable reason for the most recent claim allocation failure.
+                    type: string
+                  lastClaimFailureTime:
+                    description: When the most recent claim failure occurred.
+                    type: string
+                    format: date-time
+                  lastCheckpointDeviceProfileFingerprint:
+                    description: Device profile fingerprint from the most recent completed checkpoint.
+                    type: string
+                  lastResumeDeviceProfileFingerprint:
+                    description: Device profile fingerprint active when the most recent resume was performed.
+                    type: string
+              elasticity:
+                description: Controller-owned elasticity state. Populated only when spec.elasticity is present with mode != Disabled. Nil when elasticity is not configured (Phase 8 behavior). All fields
+                  are controller-owned.
+                type: object
+                properties:
+                  desiredWorkerCount:
+                    description: Effective preferred count from parallelism.preferredCount or identity.worldSize.
+                    type: integer
+                    format: int32
+                  targetWorkerCount:
+                    description: Mirrors spec.elasticity.targetWorkerCount for observability.
+                    type: integer
+                    format: int32
+                  activeWorkerCount:
+                    description: Observed number of running worker pods.
+                    type: integer
+                    format: int32
+                  admittedWorkerCount:
+                    description: Number of worker pods admitted by Kueue for the scalable worker pod set.
+                    type: integer
+                    format: int32
+                  resizeState:
+                    description: Current state of the resize operation.
+                    type: string
+                    enum:
+                    - Idle
+                    - Pending
+                    - InProgress
+                    - Blocked
+                    - Completed
+                    - Failed
+                  resizeReason:
+                    description: Machine-readable reason for the current resize state.
+                    type: string
+                  currentExecutionMode:
+                    description: Whether the RTJ is in fixed or elastic execution mode.
+                    type: string
+                    enum:
+                    - Fixed
+                    - Elastic
+                  resizePath:
+                    description: Resize execution path chosen for current/most recent resize.
+                    type: string
+                    enum:
+                    - InPlace
+                    - CheckpointAndRelaunch
+                  reclaimableWorkerCount:
+                    description: Workers declared reclaimable via Workload.status.reclaimablePods.
+                    type: integer
+                    format: int32
+                  reclaimablePodsPublished:
+                    description: Whether reclaimablePods has been written to the Workload status.
+                    type: boolean
+                  inPlaceShrinkSupported:
+                    description: Whether the runtime advertises in-place shrink support.
+                    type: boolean
+                  lastResizeEvent:
+                    description: Description of the most recent resize event.
+                    type: string
+                  lastResizeCheckpoint:
+                    description: Checkpoint from the most recent C&R resize. Nil when the last resize was in-place or no resize has occurred.
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        minLength: 1
+                      storageURI:
+                        type: string
+                        minLength: 1
+                      manifestURI:
+                        type: string
+                      completionTime:
+                        type: string
+                        format: date-time
+                      sourceRunAttempt:
+                        type: integer
+                        format: int32
+                      compatibilityState:
+                        type: string
+                        enum:
+                        - Compatible
+                        - Incompatible
+                        - Unknown
+                      compatibilityReason:
+                        type: string
+                      worldSize:
+                        type: integer
+                        format: int32
+                  lastResizeFailureReason:
+                    description: Reason for the most recent resize failure.
+                    type: string
+                  lastElasticTransitionTime:
+                    description: When the elasticity state last changed.
+                    type: string
+                    format: date-time
+                  lastResizeCompletedTime:
+                    description: When the most recent resize completed successfully.
+                    type: string
+                    format: date-time

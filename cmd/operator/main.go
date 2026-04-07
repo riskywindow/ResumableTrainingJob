@@ -13,9 +13,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	crwebhook "sigs.k8s.io/controller-runtime/pkg/webhook/conversion"
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 
 	trainingv1alpha1 "github.com/example/checkpoint-native-preemption-controller/api/v1alpha1"
+	trainingv1beta1 "github.com/example/checkpoint-native-preemption-controller/api/v1beta1"
 	resumeac "github.com/example/checkpoint-native-preemption-controller/internal/admissionchecks/resume"
 	"github.com/example/checkpoint-native-preemption-controller/internal/controller"
 	kueueintegration "github.com/example/checkpoint-native-preemption-controller/internal/kueue"
@@ -31,6 +33,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(kueuev1beta2.AddToScheme(scheme))
 	utilruntime.Must(trainingv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(trainingv1beta1.AddToScheme(scheme))
 }
 
 func main() {
@@ -105,6 +108,12 @@ func main() {
 	trainingv1alpha1.SetupResumeReadinessPolicyWebhookWithManager(mgr)
 	trainingv1alpha1.SetupCheckpointPriorityPolicyWebhookWithManager(mgr)
 
+	// Phase 10: Register the CRD conversion webhook handler.
+	// The handler discovers Hub/Convertible types from the scheme and routes
+	// v1alpha1 <-> v1beta1 conversions through the v1beta1 hub.
+	conversionHandler := crwebhook.NewWebhookHandler(mgr.GetScheme())
+	mgr.GetWebhookServer().Register("/convert", conversionHandler)
+
 	if err := resumeac.Setup(mgr); err != nil {
 		setupLog.Error(err, "unable to setup ResumeReadiness admission check controller")
 		os.Exit(1)
@@ -140,6 +149,8 @@ func main() {
 		"phase6OperatorMode", string(operatorMode),
 		"phase7Metrics", true,
 		"phase8Metrics", true,
+		"phase9Metrics", true,
+		"phase10ConversionWebhook", true,
 		"resumeReadinessControllerName", resumeac.ControllerName,
 	)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
