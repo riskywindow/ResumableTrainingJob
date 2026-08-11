@@ -1,0 +1,19 @@
+.DS_Store
+
+# Go build and test output
+/operator
+/fake-provisioner
+*.test
+coverage.out
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Local development
+.tmp/
+dist/
+build/
+target/
